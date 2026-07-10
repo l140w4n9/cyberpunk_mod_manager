@@ -41,6 +41,10 @@ INSTALL_RULES: list[InstallRule] = [
         "bin/x64/plugins",
         "已有 plugins 结构",
     ),
+    # INI 配置（游戏根目录，如 Alternative Character Lighting）
+    InstallRule("user.ini", "", "游戏根目录 user.ini"),
+    InstallRule("*.ini", "", "INI 配置文件"),
+    InstallRule("bin/x64/*.ini", "bin/x64", "x64 INI 配置"),
 ]
 
 
@@ -60,8 +64,12 @@ def match_rule(rel_path: str) -> InstallRule | None:
 def resolve_target(rel_path: str, rule: InstallRule) -> str:
     """计算文件最终目标相对路径。"""
     rel_path = rel_path.replace("\\", "/")
+    # 游戏根目录
+    if not rule.target_subpath:
+        basename = rel_path.rsplit("/", 1)[-1]
+        return basename
     # 压缩包内已包含正确目录结构时，保留完整相对路径
-    if rel_path.startswith(rule.target_subpath + "/"):
+    if rule.target_subpath and rel_path.startswith(rule.target_subpath + "/"):
         return rel_path
     if rule.pattern.endswith("/*"):
         prefix = rule.pattern[:-2]

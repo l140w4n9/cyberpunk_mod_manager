@@ -63,7 +63,10 @@ def find_local_archive(mod_id: int) -> Path | None:
     patterns = [
         f"{mod_id}*.zip",
         f"{mod_id}*.7z",
+        f"{mod_id}*.rar",
         f"*{mod_id}*.zip",
+        f"*{mod_id}*.7z",
+        f"*{mod_id}*.rar",
     ]
     matches: list[Path] = []
     for pattern in patterns:

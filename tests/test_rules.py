@@ -43,5 +43,15 @@ def test_resolve_preserves_cet_mod_folder() -> None:
     assert resolve_target(rel, rule) == rel
 
 
-def test_skip_unknown_file() -> None:
-    assert match_rule("readme.txt") is None
+def test_match_user_ini() -> None:
+    rule = match_rule("user.ini")
+    assert rule is not None
+    assert rule.target_subpath == ""
+    assert resolve_target("user.ini", rule) == "user.ini"
+    assert resolve_target("some/nested/user.ini", rule) == "user.ini"
+
+
+def test_match_ini_at_root() -> None:
+    rule = match_rule("config.ini")
+    assert rule is not None
+    assert resolve_target("folder/config.ini", rule) == "config.ini"

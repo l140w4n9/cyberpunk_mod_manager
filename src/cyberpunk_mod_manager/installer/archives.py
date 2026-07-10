@@ -2,10 +2,14 @@
 """模组压缩包解压（zip / 7z / rar / 单文件）。"""
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 可直接安装的单个模组文件（无需解压）
 SINGLE_MOD_SUFFIXES = {
@@ -16,6 +20,7 @@ SINGLE_MOD_SUFFIXES = {
     ".tweak",
     ".yaml",
     ".yml",
+    ".ini",
 }
 
 
@@ -62,12 +67,36 @@ def _extract_7z_py7zr(archive_path: Path, dest_dir: Path) -> None:
         archive.extractall(path=dest_dir)
 
 
+def _find_7z_from_registry() -> str | None:
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    keys = [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\7-Zip"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\7-Zip"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\7-Zip"),
+    ]
+    for hive, subkey in keys:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                base, _ = winreg.QueryValueEx(key, "Path")
+                exe = Path(str(base)) / "7z.exe"
+                if exe.is_file():
+                    return str(exe)
+        except OSError:
+            continue
+    return None
+
+
 def _find_7z_exe() -> str | None:
     candidates = [
         shutil.which("7z"),
         shutil.which("7za"),
+        _find_7z_from_registry(),
         r"C:\Program Files\7-Zip\7z.exe",
         r"C:\Program Files (x86)\7-Zip\7z.exe",
+        r"D:\Program Files\7-Zip\7z.exe",
     ]
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
@@ -79,7 +108,8 @@ def _extract_with_7z_cli(archive_path: Path, dest_dir: Path) -> None:
     exe = _find_7z_exe()
     if exe is None:
         raise RuntimeError(
-            "无法解压该格式。请安装 7-Zip，或将模组手动解压为 zip 后再安装。"
+            "未找到 7-Zip。请安装后重试：winget install 7zip.7zip "
+            "或将压缩包手动解压为 zip 再放入 downloads 目录。"
         )
     dest_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
@@ -91,6 +121,29 @@ def _extract_with_7z_cli(archive_path: Path, dest_dir: Path) -> None:
     if proc.returncode != 0:
         stderr = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(f"7-Zip 解压失败: {stderr or proc.returncode}")
+
+
+def _extract_7z(archive_path: Path, dest_dir: Path) -> None:
+    """解压 7z，py7zr 失败时回退 7-Zip CLI。"""
+    errors: list[str] = []
+    try:
+        _extract_7z_py7zr(archive_path, dest_dir)
+        return
+    except Exception as exc:
+        errors.append(f"py7zr: {exc}")
+        logger.warning("py7zr failed for %s: %s", archive_path.name, exc)
+
+    try:
+        _extract_with_7z_cli(archive_path, dest_dir)
+        return
+    except Exception as exc:
+        errors.append(f"7z.exe: {exc}")
+
+    size = archive_path.stat().st_size
+    raise RuntimeError(
+        f"无法解压 {archive_path.name}（7z, {size} bytes）: "
+        + "; ".join(errors)
+    )
 
 
 def extract_archive(archive_path: Path, dest_dir: Path) -> str:
@@ -119,37 +172,24 @@ def extract_archive(archive_path: Path, dest_dir: Path) -> str:
             ) from exc
         return kind
     if kind == "7z":
-        try:
-            _extract_7z_py7zr(archive_path, dest_dir)
-        except Exception as exc:
-            import logging
-
-            logging.getLogger(__name__).debug(
-                "py7zr extraction failed, falling back to 7z CLI",
-                exc_info=exc,
-            )
-            _extract_with_7z_cli(archive_path, dest_dir)
+        _extract_7z(archive_path, dest_dir)
         return kind
     if kind == "rar":
         _extract_with_7z_cli(archive_path, dest_dir)
         return kind
 
-    # 按扩展名兜底
     suffix = archive_path.suffix.lower()
     if suffix == ".zip":
         _extract_zip(archive_path, dest_dir)
         return "zip"
     if suffix == ".7z":
-        try:
-            _extract_7z_py7zr(archive_path, dest_dir)
-        except Exception:
-            _extract_with_7z_cli(archive_path, dest_dir)
+        _extract_7z(archive_path, dest_dir)
         return "7z"
     if suffix == ".rar":
         _extract_with_7z_cli(archive_path, dest_dir)
         return "rar"
 
     raise ValueError(
-        f"不支持的压缩格式: {archive_path.name}。"
+        f"不支持的压缩格式: {archive_path.name}（检测为 {kind}）。"
         "请使用 zip/7z/rar，或将文件解压后重新打包为 zip。"
     )
