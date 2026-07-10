@@ -33,7 +33,11 @@ def test_health(client: TestClient) -> None:
 def test_list_mods_empty(client: TestClient) -> None:
     resp = client.get("/api/mods")
     assert resp.status_code == 200
-    assert isinstance(resp.json(), list)
+    data = resp.json()
+    assert isinstance(data, list)
+    if data:
+        assert "dependencies" in data[0]
+        assert "summary_line" in data[0]
 
 
 def test_delete_mod_not_found(client: TestClient) -> None:

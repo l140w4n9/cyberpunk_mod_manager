@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from sqlmodel import select
@@ -14,10 +15,20 @@ from ..nexus.client import NexusAPIError, NexusClient
 from ..nexus.dependencies import (
     collect_dependencies,
     get_dependency_infos,
+    get_dependent_infos,
+    installed_dependents,
     missing_dependencies,
     sync_dependencies,
 )
 from ..storage.db import get_session
+from .summary import display_summary, ensure_mod_summary
+
+logger = logging.getLogger(__name__)
+
+
+def _status_str(status) -> str:
+    """将 ModStatus（或裸字符串）统一转为字符串。"""
+    return status.value if hasattr(status, "value") else str(status)
 
 
 def error_json(message: str, **extra) -> str:
@@ -108,7 +119,107 @@ async def ensure_mod_in_inventory(mod_id: int) -> int | None:
         mod_id, mod.description, details.summary
     )
     sync_dependencies(internal_id, dep_items)
+    if config.openai_api_key:
+        try:
+            await ensure_mod_summary(mod_id)
+        except Exception:
+            logger.exception("Failed to generate AI summary for mod %s", mod_id)
     return internal_id
+
+
+def build_mod_overview(mod: Mod) -> dict:
+    """构建模组列表项（含依赖、反向依赖、摘要）。"""
+    summary, summary_source = display_summary(mod)
+    deps = get_dependency_infos(mod.nexus_mod_id)
+    dependents = get_dependent_infos(mod.nexus_mod_id)
+    missing = [d for d in deps if not d.installed]
+    return {
+        "id": mod.id,
+        "nexus_mod_id": mod.nexus_mod_id,
+        "name": mod.name,
+        "version": mod.version,
+        "status": _status_str(mod.status),
+        "enabled": mod.enabled,
+        "installed_at": str(mod.installed_at) if mod.installed_at else None,
+        "thumbnail_url": mod.thumbnail_url,
+        "mod_page_url": mod.mod_page_url,
+        "summary_line": summary,
+        "summary_source": summary_source,
+        "dependencies": [d.to_dict() for d in deps],
+        "dependents": [d.to_dict() for d in dependents],
+        "dependencies_missing_count": len(missing),
+        "dependencies_satisfied": len(missing) == 0,
+    }
+
+
+def check_uninstall_report(mod_id: int) -> dict:
+    """评估卸载是否安全（反向依赖 + 卸载计划）。"""
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == mod_id)
+        ).first()
+        if mod is None:
+            return {
+                "mod_id": mod_id,
+                "safe": False,
+                "can_uninstall": False,
+                "warnings": ["模组不在库存中"],
+                "blocking_dependents": [],
+                "dependents": [],
+                "has_uninstall_plan": False,
+            }
+        internal_id = mod.id
+        name = mod.name
+        status = _status_str(mod.status)
+
+    if status != ModStatus.INSTALLED.value:
+        return {
+            "mod_id": mod_id,
+            "name": name,
+            "safe": True,
+            "can_uninstall": False,
+            "warnings": ["模组当前未安装"],
+            "blocking_dependents": [],
+            "dependents": [d.to_dict() for d in get_dependent_infos(mod_id)],
+            "has_uninstall_plan": False,
+        }
+
+    blocking = installed_dependents(mod_id)
+    plan = get_uninstall_plan(internal_id)
+    warnings: list[str] = []
+    if blocking:
+        names = ", ".join(f"{d.name} ({d.nexus_mod_id})" for d in blocking)
+        warnings.append(f"以下已安装模组仍依赖此模组：{names}")
+    if plan is None:
+        warnings.append("无卸载记录，无法精确回滚已安装文件")
+
+    safe = len(blocking) == 0 and plan is not None
+    return {
+        "mod_id": mod_id,
+        "name": name,
+        "safe": safe,
+        "can_uninstall": plan is not None,
+        "warnings": warnings,
+        "blocking_dependents": [d.to_dict() for d in blocking],
+        "dependents": [d.to_dict() for d in get_dependent_infos(mod_id)],
+        "has_uninstall_plan": plan is not None,
+        "uninstall_plan_preview": plan.to_dict() if plan else None,
+    }
+
+
+async def refresh_mod_summaries(mod_ids: list[int] | None = None) -> None:
+    """为缺少 AI 摘要的模组批量生成摘要。"""
+    with get_session() as session:
+        mods = session.exec(select(Mod)).all()
+        targets = [
+            m.nexus_mod_id
+            for m in mods
+            if (not mod_ids or m.nexus_mod_id in mod_ids)
+            and not m.summary_line
+            and (m.description or m.name)
+        ]
+    for mod_id in targets:
+        await ensure_mod_summary(mod_id)
 
 
 async def refresh_dependencies(mod_id: int) -> list[dict]:

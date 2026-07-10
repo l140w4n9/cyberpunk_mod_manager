@@ -44,20 +44,57 @@ def test_sync_and_report_dependencies() -> None:
     init_db()
     with get_session() as session:
         owner = Mod(nexus_mod_id=27967, name="0-Engine")
+        dep_mod = Mod(nexus_mod_id=107, name="CET", status=ModStatus.INSTALLED)
         session.add(owner)
+        session.add(dep_mod)
         session.commit()
         session.refresh(owner)
-        owner_id = owner.id
 
     sync_dependencies(
-        owner_id,
+        owner.id,
         [{"mod_id": 107, "name": "CET", "source": "known"}],
     )
 
     report = json.loads(mod_ops.check_dependencies_report(27967))
-    assert report["missing_count"] == 1
-    assert report["dependencies"][0]["nexus_mod_id"] == 107
-    assert report["dependencies"][0]["installed"] is False
+    assert report["missing_count"] == 0
+    assert report["dependencies"][0]["installed"] is True
+
+
+def test_reverse_dependencies_and_uninstall_safety() -> None:
+    init_db()
+    with get_session() as session:
+        base = Mod(nexus_mod_id=9107, name="BaseLib", status=ModStatus.INSTALLED)
+        child = Mod(nexus_mod_id=927967, name="ChildMod", status=ModStatus.INSTALLED)
+        session.add(base)
+        session.add(child)
+        session.commit()
+        session.refresh(base)
+        session.refresh(child)
+
+    sync_dependencies(
+        child.id,
+        [{"mod_id": 9107, "name": "BaseLib", "source": "known"}],
+    )
+
+    from cyberpunk_mod_manager.nexus.dependencies import get_dependent_infos
+
+    dependents = get_dependent_infos(9107)
+    assert len(dependents) == 1
+    assert dependents[0].nexus_mod_id == 927967
+
+    report = mod_ops.check_uninstall_report(9107)
+    assert report["safe"] is False
+    assert len(report["blocking_dependents"]) == 1
+
+
+def test_fallback_summary() -> None:
+    from cyberpunk_mod_manager.services.summary import fallback_summary
+
+    text = fallback_summary(
+        "<p>Provides shared runtime layer for CET mods.</p>",
+        name="0-Engine",
+    )
+    assert "runtime" in text.lower() or "0-Engine" in text
 
 
 @pytest.mark.asyncio

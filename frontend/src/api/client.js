@@ -5,7 +5,10 @@ async function request(url, options = {}) {
   })
   const data = await resp.json().catch(() => ({}))
   if (!resp.ok) {
-    const message = data.detail || data.error || `HTTP ${resp.status}`
+    let message = data.detail || data.error || `HTTP ${resp.status}`
+    if (typeof message === 'object') {
+      message = message.message || JSON.stringify(message)
+    }
     throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
   }
   return data
@@ -71,7 +74,8 @@ export async function chatStream(message, onEvent) {
 
 export const api = {
   health: () => request('/api/health'),
-  listMods: () => request('/api/mods'),
+  listMods: (refreshSummaries = false) =>
+    request(`/api/mods?refresh_summaries=${refreshSummaries}`),
   installMod: (modId) =>
     request('/api/mods/install', {
       method: 'POST',
@@ -88,12 +92,15 @@ export const api = {
       body: JSON.stringify({ mod_id: modId, archive_name: archiveName }),
     }),
   modDependencies: (modId) => request(`/api/mods/${modId}/dependencies`),
-  uninstallMod: (modId) =>
+  uninstallCheck: (modId) => request(`/api/mods/${modId}/uninstall-check`),
+  uninstallMod: (modId, force = false) =>
     request('/api/mods/uninstall', {
       method: 'POST',
-      body: JSON.stringify({ mod_id: modId }),
+      body: JSON.stringify({ mod_id: modId, force }),
     }),
   uninstallPlan: (modId) => request(`/api/mods/${modId}/uninstall-plan`),
+  modSummary: (modId, refresh = false) =>
+    request(`/api/mods/${modId}/summary?refresh=${refresh}`),
   chat: (message) =>
     request('/api/agent/chat', {
       method: 'POST',

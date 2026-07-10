@@ -32,6 +32,10 @@ class Mod(SQLModel, table=True):
     version: str = ""
     author: str = ""
     description: str = ""
+    # LLM 生成的一句话摘要（缓存）
+    summary_line: str = ""
+    # 摘要来源：ai / fallback / empty（区分 LLM 生成与本地截取）
+    summary_source: str = ""
     # Nexus 文件 id（最近一次下载的文件）
     nexus_file_id: int | None = None
     file_name: str = ""

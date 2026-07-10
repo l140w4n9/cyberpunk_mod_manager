@@ -98,8 +98,16 @@ async def install_local_mod(mod_id: int, archive_name: str) -> str:
     return mod_ops.install_from_archive(mod_id, archive_path)
 
 
-async def uninstall_mod(mod_id: int) -> str:
-    """按卸载计划移除已安装的模组。"""
+async def uninstall_mod(mod_id: int, force: bool = False) -> str:
+    """按卸载计划移除已安装的模组（检查反向依赖）。"""
+    report = mod_ops.check_uninstall_report(mod_id)
+    if not report.get("can_uninstall"):
+        return _error_json(report.get("warnings", ["无法卸载"])[0])
+    if not report.get("safe") and not force:
+        return _error_json(
+            "卸载可能影响其他已安装模组，请先卸载依赖方模组或使用 force",
+            report=report,
+        )
     with get_session() as session:
         mod = session.exec(
             select(Mod).where(Mod.nexus_mod_id == mod_id)
@@ -115,6 +123,7 @@ async def uninstall_mod(mod_id: int) -> str:
             "removed_files_count": len(result.added_files),
             "restored_backups": len(result.backed_up_files),
             "removed_dirs": len(result.created_dirs),
+            "forced": force,
         },
         ensure_ascii=False,
     )

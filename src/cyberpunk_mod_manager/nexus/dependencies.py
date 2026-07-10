@@ -44,6 +44,24 @@ class DependencyInfo:
         }
 
 
+@dataclass
+class DependentInfo:
+    """反向依赖：哪些模组依赖当前模组。"""
+
+    nexus_mod_id: int
+    name: str
+    installed: bool = False
+    status: str = "not_installed"
+
+    def to_dict(self) -> dict:
+        return {
+            "nexus_mod_id": self.nexus_mod_id,
+            "name": self.name,
+            "installed": self.installed,
+            "status": self.status,
+        }
+
+
 def parse_dependencies_from_text(text: str, *, exclude_mod_id: int | None = None) -> list[dict]:
     """从描述/HTML 文本中解析 Nexus 模组链接。"""
     found: dict[int, dict] = {}
@@ -144,3 +162,38 @@ def get_dependency_infos(owner_nexus_mod_id: int) -> list[DependencyInfo]:
 
 def missing_dependencies(owner_nexus_mod_id: int) -> list[DependencyInfo]:
     return [d for d in get_dependency_infos(owner_nexus_mod_id) if not d.installed]
+
+
+def get_dependent_infos(target_nexus_mod_id: int) -> list[DependentInfo]:
+    """查询依赖此模组的其他模组（反向依赖）。"""
+    from ..models import ModStatus
+
+    with get_session() as session:
+        records = session.exec(
+            select(ModDependency).where(
+                ModDependency.dep_nexus_mod_id == target_nexus_mod_id
+            )
+        ).all()
+        result: list[DependentInfo] = []
+        for rec in records:
+            owner = session.get(Mod, rec.owner_mod_id)
+            if owner is None:
+                continue
+            status = (
+                owner.status.value
+                if hasattr(owner.status, "value")
+                else str(owner.status)
+            )
+            result.append(
+                DependentInfo(
+                    nexus_mod_id=owner.nexus_mod_id,
+                    name=owner.name,
+                    installed=status == ModStatus.INSTALLED.value,
+                    status=status,
+                )
+            )
+        return result
+
+
+def installed_dependents(target_nexus_mod_id: int) -> list[DependentInfo]:
+    return [d for d in get_dependent_infos(target_nexus_mod_id) if d.installed]

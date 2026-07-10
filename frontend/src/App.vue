@@ -6,12 +6,15 @@ import StatsBar from './components/StatsBar.vue'
 import ModPanel from './components/ModPanel.vue'
 import AgentPanel from './components/AgentPanel.vue'
 import UninstallPlanPanel from './components/UninstallPlanPanel.vue'
+import UninstallDialog from './components/UninstallDialog.vue'
 
 const mods = ref([])
 const loading = ref(false)
 const installing = ref(false)
 const health = ref({ ready: false, label: '检查中...' })
 const status = ref({ message: '', type: '' })
+const uninstallDialog = ref({ visible: false, report: null, modId: null })
+const uninstalling = ref(false)
 
 function setStatus(message, type = '') {
   status.value = { message, type }
@@ -34,7 +37,7 @@ async function checkHealth() {
 async function loadMods() {
   loading.value = true
   try {
-    mods.value = await api.listMods()
+    mods.value = await api.listMods(true)
   } catch (e) {
     setStatus('加载模组失败: ' + e.message, 'err')
   } finally {
@@ -103,15 +106,41 @@ async function handleCheckDeps(modId, callback) {
 }
 
 async function handleUninstall(modId) {
-  if (!confirm(`确定卸载模组 ${modId}？`)) return
+  try {
+    const report = await api.uninstallCheck(modId)
+    if (!report.can_uninstall) {
+      setStatus('✕ ' + (report.warnings?.[0] || '无法卸载'), 'err')
+      return
+    }
+    uninstallDialog.value = { visible: true, report, modId }
+  } catch (e) {
+    setStatus('✕ 卸载检查失败: ' + e.message, 'err')
+  }
+}
+
+async function confirmUninstall(force) {
+  const modId = uninstallDialog.value.modId
+  if (!modId) return
+  uninstalling.value = true
   setStatus(`正在卸载模组 ${modId}...`, 'info')
   try {
-    const data = await api.uninstallMod(modId)
-    setStatus(`✓ 已删除 ${data.removed_files_count} 个文件，恢复 ${data.restored_backups} 个备份`, 'ok')
+    const data = await api.uninstallMod(modId, force)
+    uninstallDialog.value = { visible: false, report: null, modId: null }
+    setStatus(
+      `✓ 已删除 ${data.removed_files_count} 个文件，恢复 ${data.restored_backups} 个备份` +
+        (data.forced ? '（强制卸载）' : ''),
+      'ok',
+    )
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
+  } finally {
+    uninstalling.value = false
   }
+}
+
+function cancelUninstall() {
+  uninstallDialog.value = { visible: false, report: null, modId: null }
 }
 
 onMounted(async () => {
@@ -145,6 +174,14 @@ onMounted(async () => {
         <UninstallPlanPanel />
       </aside>
     </main>
+
+    <UninstallDialog
+      :visible="uninstallDialog.visible"
+      :report="uninstallDialog.report"
+      :loading="uninstalling"
+      @confirm="confirmUninstall"
+      @cancel="cancelUninstall"
+    />
   </div>
 </template>
 
