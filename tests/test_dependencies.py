@@ -87,14 +87,23 @@ def test_reverse_dependencies_and_uninstall_safety() -> None:
     assert len(report["blocking_dependents"]) == 1
 
 
-def test_fallback_summary() -> None:
-    from cyberpunk_mod_manager.services.summary import fallback_summary
+def test_optional_dependency_not_counted_as_missing() -> None:
+    init_db()
+    with get_session() as session:
+        owner = Mod(nexus_mod_id=23032, name="2nd Amendment Sign")
+        session.add(owner)
+        session.commit()
+        session.refresh(owner)
 
-    text = fallback_summary(
-        "<p>Provides shared runtime layer for CET mods.</p>",
-        name="0-Engine",
+    sync_dependencies(
+        owner.id,
+        [{"mod_id": 24453, "name": "NC Mediascape", "source": "optional"}],
     )
-    assert "runtime" in text.lower() or "0-Engine" in text
+
+    report = json.loads(mod_ops.check_dependencies_report(23032))
+    assert report["missing_count"] == 0
+    assert len(report["optional_dependencies"]) == 1
+    assert mod_ops.missing_dependencies(23032) == []
 
 
 @pytest.mark.asyncio

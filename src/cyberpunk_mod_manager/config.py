@@ -3,8 +3,8 @@
 
 配置文件查找顺序：
 1. 环境变量 CP2077_CONFIG 指定的路径
-2. 当前工作目录下的 config.yaml
-3. 当前工作目录下的 config.toml
+2. 当前工作目录下的 config.yaml / config.yml / config.toml
+3. Python 包所在目录及其上级目录（支持从仓库根目录启动）
 4. 数据目录 (~/.cyberpunk_mod_manager/config.yaml)
 
 配置文件示例 (config.yaml)：
@@ -24,21 +24,44 @@ from typing import Any
 from pydantic import BaseModel
 
 
+def _package_search_dirs() -> list[Path]:
+    """从已安装包位置向上收集可能包含 config 的目录。"""
+    try:
+        import cyberpunk_mod_manager as pkg
+
+        root = Path(pkg.__file__).resolve().parent
+    except Exception:
+        return []
+    dirs: list[Path] = []
+    cur = root
+    for _ in range(5):
+        dirs.append(cur)
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return dirs
+
+
 def _find_config_file() -> Path | None:
     """按优先级查找配置文件。"""
+    names = ("config.yaml", "config.yml", "config.toml")
     candidates: list[Path] = []
     env_path = os.environ.get("CP2077_CONFIG")
     if env_path:
         candidates.append(Path(env_path))
-    candidates.extend(
-        [
-            Path.cwd() / "config.yaml",
-            Path.cwd() / "config.yml",
-            Path.cwd() / "config.toml",
-            Path.home() / ".cyberpunk_mod_manager" / "config.yaml",
-        ]
-    )
+    for name in names:
+        candidates.append(Path.cwd() / name)
+    for directory in _package_search_dirs():
+        for name in names:
+            candidates.append(directory / name)
+    candidates.append(Path.home() / ".cyberpunk_mod_manager" / "config.yaml")
+
+    seen: set[str] = set()
     for p in candidates:
+        key = str(p.resolve()) if p.exists() else str(p)
+        if key in seen:
+            continue
+        seen.add(key)
         if p.exists():
             return p
     return None

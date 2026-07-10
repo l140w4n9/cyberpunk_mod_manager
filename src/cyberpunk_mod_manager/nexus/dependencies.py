@@ -16,6 +16,17 @@ NEXUS_MOD_LINK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 可选依赖（替代品/增强包，非必装）
+OPTIONAL_DEPENDENCY_IDS: dict[int, set[int]] = {
+    23032: {24453},  # NC Mediascape Enhancer 为替代增强，非硬前置
+}
+
+OPTIONAL_CONTEXT_RE = re.compile(
+    r"(alternative|optional|instead|recommend(?:ed)?|enhancer|mediascape|"
+    r"替代|可选|增强|推荐)",
+    re.IGNORECASE,
+)
+
 # 社区常见前置（Nexus 无结构化依赖 API 时的补充）
 KNOWN_MOD_DEPENDENCIES: dict[int, list[dict[str, str | int]]] = {
     27967: [
@@ -41,6 +52,7 @@ class DependencyInfo:
             "source": self.source,
             "installed": self.installed,
             "status": self.status,
+            "optional": self.source == "optional",
         }
 
 
@@ -62,14 +74,36 @@ class DependentInfo:
         }
 
 
-def parse_dependencies_from_text(text: str, *, exclude_mod_id: int | None = None) -> list[dict]:
+def _resolve_dep_source(owner_mod_id: int, dep_id: int, text: str, match_start: int) -> str:
+    if dep_id in OPTIONAL_DEPENDENCY_IDS.get(owner_mod_id, set()):
+        return "optional"
+    window = text[max(0, match_start - 240): match_start + 120]
+    if OPTIONAL_CONTEXT_RE.search(window):
+        return "optional"
+    return "parsed"
+
+
+def parse_dependencies_from_text(
+    text: str,
+    *,
+    exclude_mod_id: int | None = None,
+    owner_mod_id: int | None = None,
+) -> list[dict]:
     """从描述/HTML 文本中解析 Nexus 模组链接。"""
     found: dict[int, dict] = {}
     for match in NEXUS_MOD_LINK_RE.finditer(text or ""):
         dep_id = int(match.group(1))
         if exclude_mod_id and dep_id == exclude_mod_id:
             continue
-        found.setdefault(dep_id, {"mod_id": dep_id, "name": "", "source": "parsed"})
+        source = "parsed"
+        if owner_mod_id is not None:
+            source = _resolve_dep_source(
+                owner_mod_id, dep_id, text or "", match.start()
+            )
+        found.setdefault(
+            dep_id,
+            {"mod_id": dep_id, "name": "", "source": source},
+        )
     return list(found.values())
 
 
@@ -78,7 +112,9 @@ async def collect_dependencies(mod_id: int, description: str = "", summary: str 
     deps: dict[int, dict] = {}
 
     for item in parse_dependencies_from_text(
-        f"{summary}\n{description}", exclude_mod_id=mod_id
+        f"{summary}\n{description}",
+        exclude_mod_id=mod_id,
+        owner_mod_id=mod_id,
     ):
         deps[int(item["mod_id"])] = item
 
@@ -161,7 +197,16 @@ def get_dependency_infos(owner_nexus_mod_id: int) -> list[DependencyInfo]:
 
 
 def missing_dependencies(owner_nexus_mod_id: int) -> list[DependencyInfo]:
-    return [d for d in get_dependency_infos(owner_nexus_mod_id) if not d.installed]
+    """未安装的必装前置依赖（不含 optional）。"""
+    return [
+        d
+        for d in get_dependency_infos(owner_nexus_mod_id)
+        if not d.installed and d.source != "optional"
+    ]
+
+
+def optional_dependency_infos(owner_nexus_mod_id: int) -> list[DependencyInfo]:
+    return [d for d in get_dependency_infos(owner_nexus_mod_id) if d.source == "optional"]
 
 
 def get_dependent_infos(target_nexus_mod_id: int) -> list[DependentInfo]:

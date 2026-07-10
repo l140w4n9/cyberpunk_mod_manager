@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +30,7 @@ from sqlmodel import select
 from ..config import config
 from ..models import Mod, ModStatus, InstallRecord
 from ..storage.db import get_session
+from .archives import extract_archive
 from .rules import match_rule, resolve_target
 
 
@@ -67,15 +67,7 @@ class Installer:
         copied_files: list[str] = []  # 已复制文件，用于失败时回滚
 
         try:
-            with zipfile.ZipFile(archive_path, "r") as zf:
-                # 防止 zip bomb：校验解压后总大小
-                total_size = sum(info.file_size for info in zf.infolist())
-                MAX_EXTRACT_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
-                if total_size > MAX_EXTRACT_SIZE:
-                    raise ValueError(
-                        f"Archive uncompressed size ({total_size} bytes) exceeds limit"
-                    )
-                zf.extractall(tmp_dir)
+            extract_archive(archive_path, tmp_dir)
 
             game_root = self.game_path.resolve()
 

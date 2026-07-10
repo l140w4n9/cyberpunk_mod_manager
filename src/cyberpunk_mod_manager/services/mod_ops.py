@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from ..config import config
@@ -20,6 +21,7 @@ from ..nexus.dependencies import (
     missing_dependencies,
     sync_dependencies,
 )
+from ..nexus.schemas import ModDetails
 from ..storage.db import get_session
 from .summary import display_summary, ensure_mod_summary
 
@@ -71,37 +73,28 @@ def find_local_archive(mod_id: int) -> Path | None:
     return max(matches, key=lambda p: p.stat().st_mtime)
 
 
-def register_local_archive(mod_id: int, archive_path: Path) -> str:
-    """登记本地压缩包路径到库存。"""
-    rel = str(archive_path.relative_to(config.downloads_dir))
-    with get_session() as session:
-        mod = session.exec(
-            select(Mod).where(Mod.nexus_mod_id == mod_id)
-        ).first()
-        if mod is None:
-            mod = Mod(nexus_mod_id=mod_id, name=f"Mod {mod_id}")
-            session.add(mod)
-            session.commit()
-            session.refresh(mod)
-        mod.local_path = rel
-        mod.file_name = archive_path.name
-        mod.status = ModStatus.DOWNLOADED
-        session.add(mod)
-        session.commit()
-    return rel
+def _apply_details_to_mod(mod: Mod, details: ModDetails) -> None:
+    mod.name = details.name
+    mod.version = details.version
+    mod.author = details.author
+    mod.description = details.summary or details.description
+    mod.mod_page_url = details.mod_page_url
+    mod.thumbnail_url = details.picture_url
 
 
-async def ensure_mod_in_inventory(mod_id: int) -> int | None:
-    """确保模组在库存中，返回内部 id。"""
+def upsert_mod_from_details(mod_id: int, details: ModDetails) -> int:
+    """插入或更新库存模组，返回内部 id（并发安全）。"""
     with get_session() as session:
         mod = session.exec(
             select(Mod).where(Mod.nexus_mod_id == mod_id)
         ).first()
         if mod is not None:
+            _apply_details_to_mod(mod, details)
+            session.add(mod)
+            session.commit()
+            session.refresh(mod)
             return mod.id
-    async with NexusClient() as client:
-        details = await client.get_mod_details(mod_id)
-    with get_session() as session:
+
         mod = Mod(
             nexus_mod_id=mod_id,
             name=details.name,
@@ -112,18 +105,92 @@ async def ensure_mod_in_inventory(mod_id: int) -> int | None:
             thumbnail_url=details.picture_url,
         )
         session.add(mod)
+        try:
+            session.commit()
+            session.refresh(mod)
+            return mod.id
+        except IntegrityError:
+            session.rollback()
+            existing = session.exec(
+                select(Mod).where(Mod.nexus_mod_id == mod_id)
+            ).first()
+            if existing is None:
+                raise
+            _apply_details_to_mod(existing, details)
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
+            return existing.id
+
+
+def get_or_create_mod_stub(mod_id: int, name: str = "") -> int:
+    """获取或创建最小库存记录（用于本地包登记等）。"""
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == mod_id)
+        ).first()
+        if mod is not None:
+            return mod.id
+        mod = Mod(nexus_mod_id=mod_id, name=name or f"Mod {mod_id}")
+        session.add(mod)
+        try:
+            session.commit()
+            session.refresh(mod)
+            return mod.id
+        except IntegrityError:
+            session.rollback()
+            existing = session.exec(
+                select(Mod).where(Mod.nexus_mod_id == mod_id)
+            ).first()
+            if existing is None:
+                raise
+            return existing.id
+
+
+def register_local_archive(mod_id: int, archive_path: Path) -> str:
+    """登记本地压缩包路径到库存。"""
+    rel = str(archive_path.relative_to(config.downloads_dir))
+    get_or_create_mod_stub(mod_id)
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == mod_id)
+        ).first()
+        if mod is None:
+            raise RuntimeError(f"Mod {mod_id} missing after upsert")
+        mod.local_path = rel
+        mod.file_name = archive_path.name
+        mod.status = ModStatus.DOWNLOADED
+        session.add(mod)
         session.commit()
-        session.refresh(mod)
-        internal_id = mod.id
+    return rel
+
+
+async def ensure_mod_in_inventory(
+    mod_id: int,
+    details: ModDetails | None = None,
+) -> int:
+    """确保模组在库存中，返回内部 id。"""
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == mod_id)
+        ).first()
+        if mod is not None and details is None:
+            return mod.id
+
+    if details is None:
+        async with NexusClient() as client:
+            details = await client.get_mod_details(mod_id)
+
+    internal_id = upsert_mod_from_details(mod_id, details)
     dep_items = await collect_dependencies(
-        mod_id, mod.description, details.summary
+        mod_id, details.summary or details.description, details.summary
     )
     sync_dependencies(internal_id, dep_items)
     if config.openai_api_key:
         try:
             await ensure_mod_summary(mod_id)
         except Exception:
-            logger.exception("Failed to generate AI summary for mod %s", mod_id)
+            logger.warning("Failed to generate AI summary for mod %s", mod_id)
     return internal_id
 
 
@@ -132,7 +199,7 @@ def build_mod_overview(mod: Mod) -> dict:
     summary, summary_source = display_summary(mod)
     deps = get_dependency_infos(mod.nexus_mod_id)
     dependents = get_dependent_infos(mod.nexus_mod_id)
-    missing = [d for d in deps if not d.installed]
+    missing = [d for d in deps if not d.installed and d.source != "optional"]
     return {
         "id": mod.id,
         "nexus_mod_id": mod.nexus_mod_id,
@@ -419,11 +486,15 @@ async def install_mod_with_dependencies(
 def check_dependencies_report(mod_id: int) -> str:
     """返回依赖检查报告。"""
     deps = get_dependency_infos(mod_id)
-    missing = [d for d in deps if not d.installed]
+    required = [d for d in deps if d.source != "optional"]
+    optional = [d for d in deps if d.source == "optional"]
+    missing = [d for d in required if not d.installed]
     return json.dumps(
         {
             "mod_id": mod_id,
             "dependencies": [d.to_dict() for d in deps],
+            "required_dependencies": [d.to_dict() for d in required],
+            "optional_dependencies": [d.to_dict() for d in optional],
             "missing_count": len(missing),
             "all_satisfied": len(missing) == 0,
             "missing": [d.to_dict() for d in missing],

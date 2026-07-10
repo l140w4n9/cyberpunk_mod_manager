@@ -97,6 +97,11 @@ async def run_agent_stream(
             record = tools.get(evt.tool_call_id)
             if record is not None:
                 record.arguments += evt.delta or ""
+                yield "tool_args_delta", {
+                    "id": evt.tool_call_id,
+                    "delta": evt.delta or "",
+                    "arguments": _truncate(record.arguments, 4000),
+                }
             continue
 
         if isinstance(evt, ToolCallEndEvent):
@@ -112,6 +117,11 @@ async def run_agent_stream(
             record = tools.get(evt.tool_call_id)
             if record is not None:
                 record.result += evt.delta or ""
+                yield "tool_result_delta", {
+                    "id": evt.tool_call_id,
+                    "delta": evt.delta or "",
+                    "result": _truncate(record.result, 4000),
+                }
             continue
 
         if isinstance(evt, ToolResultEndEvent):

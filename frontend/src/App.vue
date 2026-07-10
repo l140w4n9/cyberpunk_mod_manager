@@ -1,13 +1,12 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from './api/client'
-import AppHeader from './components/AppHeader.vue'
-import StatsBar from './components/StatsBar.vue'
-import ModPanel from './components/ModPanel.vue'
-import AgentPanel from './components/AgentPanel.vue'
-import UninstallPlanPanel from './components/UninstallPlanPanel.vue'
+import AppSidebar from './components/layout/AppSidebar.vue'
+import AgentWorkspace from './views/AgentWorkspace.vue'
+import ModsWorkspace from './views/ModsWorkspace.vue'
 import UninstallDialog from './components/UninstallDialog.vue'
 
+const activeView = ref('agent')
 const mods = ref([])
 const loading = ref(false)
 const installing = ref(false)
@@ -18,6 +17,11 @@ const uninstalling = ref(false)
 
 function setStatus(message, type = '') {
   status.value = { message, type }
+  if (type) {
+    setTimeout(() => {
+      if (status.value.message === message) status.value = { message: '', type: '' }
+    }, 5000)
+  }
 }
 
 async function checkHealth() {
@@ -28,16 +32,21 @@ async function checkHealth() {
     if (!data.llm_configured) label = 'LLM 未配置'
     else if (!data.nexus_configured) label = 'Nexus Key 未配置'
     else if (!data.nexus_valid) label = 'Nexus Key 无效'
-    health.value = { ready, label }
+    health.value = {
+      ready,
+      label,
+      llm_configured: data.llm_configured,
+      config_file: data.config_file || '',
+    }
   } catch {
-    health.value = { ready: false, label: '连接失败' }
+    health.value = { ready: false, label: '连接失败', llm_configured: false, config_file: '' }
   }
 }
 
 async function loadMods() {
   loading.value = true
   try {
-    mods.value = await api.listMods(true)
+    mods.value = await api.listMods(false)
   } catch (e) {
     setStatus('加载模组失败: ' + e.message, 'err')
   } finally {
@@ -45,13 +54,16 @@ async function loadMods() {
   }
 }
 
+function navigate(view) {
+  activeView.value = view
+}
+
 async function handleInstall(modId) {
   installing.value = true
   setStatus(`正在安装模组 ${modId}...`, 'info')
   try {
     const data = await api.installMod(modId)
-    const name = data.name || `模组 ${modId}`
-    setStatus(`✓ ${name} 安装完成，新增 ${data.added_files_count} 个文件`, 'ok')
+    setStatus(`✓ ${data.name || modId} 安装完成`, 'ok')
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -62,17 +74,15 @@ async function handleInstall(modId) {
 
 async function handleInstallWithDeps(modId) {
   installing.value = true
-  setStatus(`正在安装模组 ${modId} 及前置依赖...`, 'info')
+  setStatus(`正在安装模组 ${modId} 及依赖...`, 'info')
   try {
     const data = await api.installModWithDeps(modId)
-    const depsOk = (data.dependencies_installed || []).length
     const depsFail = (data.dependencies_failed || []).length
-    const name = data.name || `模组 ${modId}`
-    let msg = `✓ ${name} 安装完成，新增 ${data.added_files_count} 个文件`
-    if (depsOk || depsFail) {
-      msg += `；依赖成功 ${depsOk}，失败 ${depsFail}`
-    }
-    setStatus(msg, depsFail ? 'err' : 'ok')
+    setStatus(
+      `✓ 安装完成，新增 ${data.added_files_count} 文件` +
+        (depsFail ? `，${depsFail} 个依赖失败` : ''),
+      depsFail ? 'err' : 'ok',
+    )
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -83,10 +93,10 @@ async function handleInstallWithDeps(modId) {
 
 async function handleInstallLocal({ modId, archiveName }) {
   installing.value = true
-  setStatus(`正在从本地包安装模组 ${modId}...`, 'info')
+  setStatus(`本地安装模组 ${modId}...`, 'info')
   try {
     const data = await api.installLocalMod(modId, archiveName)
-    setStatus(`✓ 本地安装完成，新增 ${data.added_files_count} 个文件`, 'ok')
+    setStatus(`✓ 本地安装完成，${data.added_files_count} 文件`, 'ok')
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -97,10 +107,9 @@ async function handleInstallLocal({ modId, archiveName }) {
 
 async function handleCheckDeps(modId, callback) {
   try {
-    const report = await api.modDependencies(modId)
-    callback(report)
+    callback(await api.modDependencies(modId))
   } catch (e) {
-    setStatus('✕ 依赖检查失败: ' + e.message, 'err')
+    setStatus('依赖检查失败: ' + e.message, 'err')
     callback(null)
   }
 }
@@ -109,12 +118,12 @@ async function handleUninstall(modId) {
   try {
     const report = await api.uninstallCheck(modId)
     if (!report.can_uninstall) {
-      setStatus('✕ ' + (report.warnings?.[0] || '无法卸载'), 'err')
+      setStatus(report.warnings?.[0] || '无法卸载', 'err')
       return
     }
     uninstallDialog.value = { visible: true, report, modId }
   } catch (e) {
-    setStatus('✕ 卸载检查失败: ' + e.message, 'err')
+    setStatus('卸载检查失败: ' + e.message, 'err')
   }
 }
 
@@ -122,15 +131,10 @@ async function confirmUninstall(force) {
   const modId = uninstallDialog.value.modId
   if (!modId) return
   uninstalling.value = true
-  setStatus(`正在卸载模组 ${modId}...`, 'info')
   try {
     const data = await api.uninstallMod(modId, force)
     uninstallDialog.value = { visible: false, report: null, modId: null }
-    setStatus(
-      `✓ 已删除 ${data.removed_files_count} 个文件，恢复 ${data.restored_backups} 个备份` +
-        (data.forced ? '（强制卸载）' : ''),
-      'ok',
-    )
+    setStatus(`✓ 已卸载 ${data.removed_files_count} 个文件`, 'ok')
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -149,16 +153,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="app">
-    <div class="bg-grid" />
-    <div class="bg-glow bg-glow--yellow" />
-    <div class="bg-glow bg-glow--cyan" />
+  <div class="app-shell">
+    <AppSidebar
+      :active="activeView"
+      :health="health"
+      @navigate="navigate"
+      @refresh="loadMods"
+    />
 
-    <AppHeader :health="health" @refresh="loadMods" />
-    <StatsBar :mods="mods" />
-
-    <main class="container">
-      <ModPanel
+    <main class="main-content">
+      <AgentWorkspace v-if="activeView === 'agent'" :health="health" @done="loadMods" />
+      <ModsWorkspace
+        v-else
         :mods="mods"
         :loading="loading"
         :installing="installing"
@@ -169,10 +175,6 @@ onMounted(async () => {
         @check-deps="handleCheckDeps"
         @uninstall="handleUninstall"
       />
-      <aside class="sidebar">
-        <AgentPanel @done="loadMods" />
-        <UninstallPlanPanel />
-      </aside>
     </main>
 
     <UninstallDialog
@@ -186,50 +188,20 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.app { position: relative; min-height: 100vh; display: flex; flex-direction: column; }
-
-.bg-grid {
-  position: fixed;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
-  background-size: 48px 48px;
-  pointer-events: none;
-  z-index: 0;
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg);
 }
-.bg-glow {
-  position: fixed;
-  width: 600px;
-  height: 600px;
-  border-radius: 50%;
-  filter: blur(120px);
-  opacity: 0.15;
-  pointer-events: none;
-  z-index: 0;
-}
-.bg-glow--yellow { top: -200px; right: -100px; background: var(--accent); }
-.bg-glow--cyan { bottom: -200px; left: -100px; background: var(--accent2); }
-
-.container {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: 1fr 400px;
-  gap: 20px;
-  padding: 20px 32px 32px;
-  max-width: 1440px;
-  margin: 0 auto;
-  width: 100%;
+.main-content {
   flex: 1;
+  margin-left: var(--sidebar-width);
+  min-width: 0;
+  min-height: 100vh;
 }
-.sidebar { display: flex; flex-direction: column; gap: 20px; }
 
-@media (max-width: 1100px) {
-  .container { grid-template-columns: 1fr; }
-  .sidebar { order: -1; }
-}
-@media (max-width: 600px) {
-  .container { padding: 16px; }
+@media (max-width: 900px) {
+  .app-shell { flex-direction: column; }
+  .main-content { margin-left: 0; }
 }
 </style>

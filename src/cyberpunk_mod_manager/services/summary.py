@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 
@@ -41,6 +42,60 @@ def fallback_summary(
     return text
 
 
+def _parse_sse_response(text: str) -> dict:
+    """将 text/event-stream 响应聚合为类 OpenAI JSON 结构。"""
+    content_parts: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        choice = (chunk.get("choices") or [{}])[0]
+        delta = choice.get("delta") or {}
+        message = choice.get("message") or {}
+        piece = delta.get("content") or message.get("content") or ""
+        if piece:
+            content_parts.append(piece)
+    return {"choices": [{"message": {"content": "".join(content_parts)}}]}
+
+
+def _parse_chat_response(resp: httpx.Response) -> dict:
+    """解析 LLM 响应（兼容 JSON 与 SSE）。"""
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if not resp.content:
+        raise ValueError("LLM 返回空响应")
+
+    if "text/event-stream" in ctype:
+        return _parse_sse_response(resp.text)
+
+    try:
+        return resp.json()
+    except json.JSONDecodeError as exc:
+        snippet = resp.text[:200].replace("\n", " ")
+        raise ValueError(f"LLM 响应不是有效 JSON: {snippet}") from exc
+
+
+def _extract_message_content(data: dict) -> str:
+    """从 chat completion 结果提取文本（兼容 reasoning 模型）。"""
+    message = (data.get("choices") or [{}])[0].get("message") or {}
+    content = (message.get("content") or "").strip()
+    if content:
+        return content
+    # 部分推理模型仅填充 reasoning_content，最终 content 为空
+    reasoning = (message.get("reasoning_content") or "").strip()
+    if reasoning:
+        for sep in ("。", ". ", "\n"):
+            if sep in reasoning:
+                return reasoning.split(sep, 1)[0].strip()
+        return reasoning[:96].rstrip() + ("…" if len(reasoning) > 96 else "")
+    return ""
+
+
 async def generate_ai_summary(name: str, description: str) -> tuple[str, str]:
     """调用 LLM 生成中文一句话摘要，返回 (摘要, 来源 ai|fallback)。"""
     if not config.openai_api_key:
@@ -52,7 +107,7 @@ async def generate_ai_summary(name: str, description: str) -> tuple[str, str]:
 
     prompt = (
         "你是赛博朋克2077模组助手。请用一句简洁的中文（不超过40字）概括以下模组的功能，"
-        "不要加引号或前缀：\n"
+        "只输出这一句，不要解释：\n"
         f"模组名：{name}\n"
         f"描述：{clean[:1200]}"
     )
@@ -64,20 +119,22 @@ async def generate_ai_summary(name: str, description: str) -> tuple[str, str]:
     payload = {
         "model": config.model_name,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 80,
+        "max_tokens": 512,
         "temperature": 0.3,
+        "stream": False,
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
-        data = resp.json()
-    content = (
-        data.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-        .strip()
-    )
+        data = _parse_chat_response(resp)
+
+    content = _extract_message_content(data)
     if not content:
+        logger.warning(
+            "LLM returned empty summary for %s (model=%s), using fallback",
+            name,
+            config.model_name,
+        )
         return fallback_summary(description, name=name), "fallback"
     if len(content) > 96:
         return content[:95].rstrip() + "…", "ai"
@@ -87,21 +144,13 @@ async def generate_ai_summary(name: str, description: str) -> tuple[str, str]:
 def display_summary(mod: Mod) -> tuple[str, str]:
     """返回 (摘要文本, 来源 ai|fallback|empty)。"""
     if mod.summary_line:
-        # summary_source 为空时向后兼容已有数据，默认视为 ai
         return mod.summary_line, mod.summary_source or "ai"
     if mod.description:
         return fallback_summary(mod.description, name=mod.name), "fallback"
     return "", "empty"
 
 
-def _load_mod_for_summary(
-    mod_id: int,
-) -> tuple[int | None, str, str, str]:
-    """同步读取摘要生成所需字段。
-
-    返回 (internal_id, name, description, existing_summary)。
-    internal_id 为 None 表示模组不存在。
-    """
+def _load_mod_for_summary(mod_id: int) -> tuple[int | None, str, str, str]:
     with get_session() as session:
         mod = session.exec(select(Mod).where(Mod.nexus_mod_id == mod_id)).first()
         if mod is None:
@@ -110,7 +159,6 @@ def _load_mod_for_summary(
 
 
 def _save_mod_summary(internal_id: int, summary: str, source: str) -> None:
-    """同步写入摘要及其来源到数据库。"""
     with get_session() as session:
         mod = session.get(Mod, internal_id)
         if mod is not None:
@@ -122,7 +170,6 @@ def _save_mod_summary(internal_id: int, summary: str, source: str) -> None:
 
 async def ensure_mod_summary(mod_id: int, *, force: bool = False) -> str:
     """确保模组有一句话摘要并写入数据库。"""
-    # 通过线程执行同步 DB 操作，避免在事件循环上阻塞
     internal_id, name, description, existing = await asyncio.to_thread(
         _load_mod_for_summary, mod_id
     )
@@ -133,14 +180,12 @@ async def ensure_mod_summary(mod_id: int, *, force: bool = False) -> str:
 
     try:
         summary, source = await generate_ai_summary(name, description)
-    except httpx.HTTPError as exc:
-        logger.warning("AI summary generation failed for mod %s: %s", mod_id, exc)
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("AI summary failed for mod %s: %s", mod_id, exc)
         summary = fallback_summary(description, name=name)
         source = "fallback"
-    except Exception:
-        logger.exception(
-            "Unexpected error generating AI summary for mod %s", mod_id
-        )
+    except Exception as exc:
+        logger.warning("AI summary unexpected error for mod %s: %s", mod_id, exc)
         summary = fallback_summary(description, name=name)
         source = "fallback"
 

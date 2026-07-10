@@ -24,22 +24,18 @@ def _error_json(message: str, **extra) -> str:
 
 
 async def search_mod(mod_id: int) -> str:
-    """根据 Nexus 模组 ID 查询模组详情，并同步依赖关系。
-
-    Args:
-        mod_id: Nexus Mods 的模组 ID（整数）
-
-    Returns:
-        模组信息与依赖列表的 JSON 字符串
-    """
-    async with NexusClient() as client:
-        details = await client.get_mod_details(mod_id)
-    internal_id = await mod_ops.ensure_mod_in_inventory(mod_id)
-    deps = await mod_ops.refresh_dependencies(mod_id)
-    payload = details.model_dump()
-    payload["dependencies"] = deps
-    payload["internal_id"] = internal_id
-    return json.dumps(payload, ensure_ascii=False)
+    """根据 Nexus 模组 ID 查询模组详情，并同步依赖关系。"""
+    try:
+        async with NexusClient() as client:
+            details = await client.get_mod_details(mod_id)
+        internal_id = await mod_ops.ensure_mod_in_inventory(mod_id, details=details)
+        deps = await mod_ops.refresh_dependencies(mod_id)
+        payload = details.model_dump()
+        payload["dependencies"] = deps
+        payload["internal_id"] = internal_id
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception as exc:
+        return _error_json(f"查询模组失败: {exc}")
 
 
 async def check_dependencies(mod_id: int) -> str:
