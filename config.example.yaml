@@ -1,0 +1,16 @@
+# Cyberpunk 2077 模组管理器 配置文件
+# 将此文件复制为 config.yaml 并填入你的配置，放在项目根目录或 ~/.cyberpunk_mod_manager/ 下。
+
+# Cyberpunk 2077 游戏安装根目录
+game_path: "D:\\Program Files (x86)\\Steam\\steamapps\\common\\Cyberpunk 2077"
+
+# Nexus Mods API Key（在 https://www.nexusmods.com/users/myaccount?tab=api 申请）
+nexus_api_key: "你的 Nexus API Key"
+
+# LLM 配置（OpenAI 兼容接口）
+openai_api_key: "你的 LLM API Key"
+model_name: "gpt-4o-mini"
+openai_base_url: "https://api.openai.com/v1"
+
+# 数据目录（存放数据库、下载缓存、备份），默认 ~/.cyberpunk_mod_manager
+# data_dir: "C:/Users/你的用户名/.cyberpunk_mod_manager"

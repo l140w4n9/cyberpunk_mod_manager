@@ -1,0 +1,37 @@
+[project]
+name = "cyberpunk-mod-manager"
+version = "0.1.0"
+description = "LLM-powered mod manager for Cyberpunk 2077, built on AgentScope"
+requires-python = ">=3.10"
+dependencies = [
+    "agentscope",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "httpx>=0.27",
+    "sqlmodel>=0.0.16",
+    "pydantic>=2.6",
+    "aiofiles>=23.2",
+    "pyyaml>=6.0",
+    "tomli; python_version < \"3.11\"",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff", "httpx"]
+
+[project.scripts]
+cyberpunk-mod-manager = "cyberpunk_mod_manager.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"cyberpunk_mod_manager" = ["web/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]

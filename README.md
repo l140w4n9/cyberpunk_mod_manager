@@ -54,6 +54,19 @@ uvicorn cyberpunk_mod_manager.api.app:app --reload
 
 打开浏览器访问 http://127.0.0.1:8000
 
+### 4. 前端开发（Vue 3 + Vite）
+
+Web 界面使用 Vue 3 构建，源码在 `frontend/` 目录：
+
+```bash
+cd frontend
+npm install
+npm run dev      # 开发模式 http://127.0.0.1:5173（自动代理 /api 到后端）
+npm run build    # 构建到 src/cyberpunk_mod_manager/web/
+```
+
+> 修改前端后需执行 `npm run build`，FastAPI 才会提供最新静态资源。
+
 ## 使用方式
 
 ### 方式一：Web 页面
@@ -80,7 +93,8 @@ src/cyberpunk_mod_manager/
 ├── installer/             # 安装/卸载引擎 + 路径规则
 ├── agent/                 # AgentScope Agent + 工具
 ├── api/                   # FastAPI 路由
-└── web/                   # 前端页面
+├── web/                   # 前端构建产物（Vue 构建输出）
+└── frontend/              # Vue 3 + Vite 源码
 ```
 
 ## 卸载记录机制
