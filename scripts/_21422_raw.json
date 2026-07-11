@@ -1,0 +1,36 @@
+{
+  "name": "Native Interactions Framework",
+  "summary": "Framework that allows for the placement of interactions such as sitting, sleeping, drinking, showering and more.",
+  "description": "[img]https://i.imgur.com/x9zdRpE.gif[/img]\n<br />\n<br />[b][color=#00ff00][size=4][u]What is Native Interactions Framework:[/u][/size][/color][u][color=#00ff00][size=4]\n<br />[/size][/color][/u][/b]\n<br />[list]\n<br />[*]Native Interactions Framework (NIF) allows modders to easily place supported interactions in the game world\n<br />[*]No need to edit files or scenes by hand, everything is done through an in-game UI\n<br />[*]Offers 21 unique interactions\n<br />[*]Also offers interactions which interact with the environment, such as sitting and controlling the TV\n<br />[*]Creations can [url=https://wiki.redmodding.org/cyberpunk-2077-modding/modding-guides/world-editing/native-interactions-framework/getting-started#sharing-creations]easily be shared[/url] and be made part of your mod\n<br />[/list][b][color=#00ffff][size=4][u]Features:\n<br />\n<br />[/u][/size][/color][/b][list]\n<br />[*]In-Game UI for placing and editing the interactions\n<br />[*]World Builder placement helpers for interactions with props\n<br />[*]21 unique interactions:\n<br />[*]Wardrobe\n<br />[*]Couch sitting (With TV Controls)\n<br />[*]Tea Drinking\n<br />[*]Bed\n<br />[*]Shower\n<br />[*]Coffee Drinking\n<br />[*]Bar Sitting (With drinking and smoking)\n<br />[*]Incense burning\n<br />[*]Guitar Playing\n<br />[*]Mirror (Change appearance and facial expressions)\n<br />[*]Billiard\n<br />[*]Meditation\n<br />[*]Dancing\n<br />[*]Chair sitting\n<br />[*]Leaning (With smoking)\n<br />[*]Netrunner Chair sitting\n<br />[*]Iguana Petting\n<br />[*]Yakitori Skewer Eating\n<br />[*]Basketball throwing\n<br />[*]Apartment purchasing\n<br />[*]Appearance changing\n<br />[*]Teleport\n<br />[/list]\n<br />[color=#00ff00][size=4][b][u]Documentations:\n<br />[/u][/b][/size][/color]\n<br />[url=https://wiki.redmodding.org/cyberpunk-2077-modding/modding-guides/world-editing/native-interactions-framework][size=5]&gt; Documentations and Guides &lt;[/size][/url][size=5]\n<br />[url=https://github.com/justarandomguyintheinternet/nativeInteractions]&gt; GitHub Page &lt;[/url][/size]\n<br />\n<br />[img]https://i.imgur.com/7QWceu0.gif[/img]\n<br />\n<br />[b][color=#00ff00][size=4][u]Credits and thanks:\n<br />\n<br />[/u][/size][/color][/b][list]\n<br />[*] [url=https://next.nexusmods.com/profile/psiberx]psiberx[/url] for Codeware and ArchiveXL, and always helping out with issues and feature requests\n<br />[*] The CET team for making CET\n<br />[*]Thanks to all the testers: [url=https://next.nexusmods.com/profile/brocreate/mods?gameId=3333]Nutboy[/url]﻿, [url=https://next.nexusmods.com/profile/LiquidBronze/mods?gameId=3333]LiquidBronze[/url]﻿, Delta\n<br />[/list]\n<br />[b][u][color=#00ff00][size=4][b][u][color=#00ff00][size=4][i][url=https://www.buymeacoffee.com/keanuWheeze][img]https://cdn.jsdelivr.net/gh/justarandomguyintheinternet/keanuWheeze@main/buymeacoffee.png[/img][/url][/i][/size][/color][/u][/b][/size][/color][/u][/b]",
+  "picture_url": "https://staticdelivery.nexusmods.com/mods/3333/images/21422/21422-1747403218-2095037343.jpeg",
+  "mod_downloads": 734160,
+  "mod_unique_downloads": 403854,
+  "uid": 14315126018990,
+  "mod_id": 21422,
+  "game_id": 3333,
+  "allow_rating": true,
+  "domain_name": "cyberpunk2077",
+  "category_id": 7,
+  "version": "1.05b",
+  "endorsement_count": 5690,
+  "created_timestamp": 1747559364,
+  "created_time": "2025-05-18T09:09:24.000+00:00",
+  "updated_timestamp": 1768560641,
+  "updated_time": "2026-01-16T10:50:41.000+00:00",
+  "author": "keanuWheeze",
+  "uploaded_by": "NexusGuy999",
+  "uploaded_users_profile_url": "https://www.nexusmods.com/users/77476393",
+  "contains_adult_content": false,
+  "status": "published",
+  "available": true,
+  "user": {
+    "member_id": 77476393,
+    "member_group_id": 27,
+    "name": "NexusGuy999"
+  },
+  "endorsement": {
+    "endorse_status": "Undecided",
+    "timestamp": null,
+    "version": null
+  }
+}

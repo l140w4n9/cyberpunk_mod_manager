@@ -21,7 +21,7 @@ from ..nexus.dependencies import (
     missing_dependencies,
     sync_dependencies,
 )
-from ..nexus.schemas import ModDetails
+from ..nexus.schemas import FilePin, ModDetails
 from ..storage.db import get_session
 from .concurrency import DEFAULT_CONCURRENCY, gather_bounded
 from .summary import display_summary, ensure_mod_summary
@@ -96,6 +96,9 @@ def _apply_details_to_mod(mod: Mod, details: ModDetails) -> None:
     mod.description = details.summary or details.description
     mod.mod_page_url = details.mod_page_url
     mod.thumbnail_url = details.picture_url
+    if details.internal_mod_id:
+        mod.nexus_internal_mod_id = details.internal_mod_id
+    mod.legacy_mod_requirements = details.legacy_mod_requirements
 
 
 def upsert_mod_from_details(mod_id: int, details: ModDetails) -> int:
@@ -203,8 +206,16 @@ async def ensure_mod_in_inventory(
             details = await client.get_mod_details(mod_id)
 
     internal_id = upsert_mod_from_details(mod_id, details)
+    version_id = None
+    with get_session() as session:
+        mod = session.get(Mod, internal_id)
+        if mod and mod.nexus_version_id:
+            version_id = mod.nexus_version_id
     dep_items = await collect_dependencies(
-        mod_id, details.summary or details.description, details.summary
+        mod_id,
+        details.description,
+        details.summary,
+        version_id=version_id,
     )
     sync_dependencies(internal_id, dep_items)
     if config.openai_api_key:
@@ -220,7 +231,7 @@ def build_mod_overview(mod: Mod) -> dict:
     summary, summary_source = display_summary(mod)
     deps = get_dependency_infos(mod.nexus_mod_id)
     dependents = get_dependent_infos(mod.nexus_mod_id)
-    missing = [d for d in deps if not d.installed and d.source != "optional"]
+    missing = [d for d in deps if not d.installed and d.source not in ("optional", "external")]
     return {
         "id": mod.id,
         "nexus_mod_id": mod.nexus_mod_id,
@@ -237,6 +248,8 @@ def build_mod_overview(mod: Mod) -> dict:
         "dependents": [d.to_dict() for d in dependents],
         "dependencies_missing_count": len(missing),
         "dependencies_satisfied": len(missing) == 0,
+        "nexus_version_id": mod.nexus_version_id or "",
+        "legacy_mod_requirements": mod.legacy_mod_requirements,
     }
 
 
@@ -320,8 +333,16 @@ async def refresh_dependencies(mod_id: int) -> list[dict]:
         return []
     async with NexusClient() as client:
         details = await client.get_mod_details(mod_id)
+    version_id = None
+    with get_session() as session:
+        mod = session.get(Mod, internal_id)
+        if mod and mod.nexus_version_id:
+            version_id = mod.nexus_version_id
     dep_items = await collect_dependencies(
-        mod_id, details.description, details.summary
+        mod_id,
+        details.description,
+        details.summary,
+        version_id=version_id,
     )
     sync_dependencies(internal_id, dep_items)
     return [d.to_dict() for d in get_dependency_infos(mod_id)]
@@ -358,15 +379,29 @@ def install_from_archive(mod_id: int, archive_path: Path) -> str:
     )
 
 
-async def download_mod(mod_id: int) -> str:
-    """通过 Nexus API 下载模组。"""
+async def download_mod(
+    mod_id: int,
+    *,
+    pin: FilePin | None = None,
+) -> str:
+    """通过 Nexus API 下载模组（v3 定位版本 + 遗留下载链接）。"""
     try:
         async with NexusClient() as client:
-            mod_file = await client.pick_primary_file(mod_id)
-            if mod_file is None:
+            batch = await client.get_mods_batch([mod_id])
+            info = batch.get(mod_id)
+            if info and info.adult_content:
+                return error_json(
+                    f"模组 {mod_id} 标记为成人内容，已阻止自动下载",
+                    adult_content=True,
+                    mod_id=mod_id,
+                )
+            mod_file = await client.resolve_target_version(mod_id, pin=pin)
+            if mod_file is None or not mod_file.file_id:
                 return error_json(f"No file found for mod {mod_id}")
             local_path = await client.download_file(
-                mod_id, mod_file.file_id, config.downloads_dir,
+                mod_id,
+                mod_file.file_id,
+                config.downloads_dir,
                 file_name=mod_file.file_name,
             )
     except NexusAPIError as exc:
@@ -386,6 +421,13 @@ async def download_mod(mod_id: int) -> str:
             mod.nexus_file_id = mod_file.file_id
             mod.file_name = mod_file.file_name or local_path.name
             mod.local_path = str(local_path.relative_to(config.downloads_dir))
+            mod.nexus_version_id = mod_file.version_id or mod.nexus_version_id
+            mod.nexus_mod_file_id = mod_file.mod_file_id or mod.nexus_mod_file_id
+            mod.nexus_internal_mod_id = (
+                mod_file.internal_mod_id or mod.nexus_internal_mod_id
+            )
+            if mod_file.version:
+                mod.version = mod_file.version
             mod.status = ModStatus.DOWNLOADED
             session.add(mod)
             session.commit()
@@ -394,7 +436,9 @@ async def download_mod(mod_id: int) -> str:
         {
             "mod_id": mod_id,
             "file_id": mod_file.file_id,
+            "version_id": mod_file.version_id,
             "file_name": mod_file.file_name,
+            "version": mod_file.version,
             "local_path": str(local_path),
             "source": "api",
         },
@@ -466,6 +510,7 @@ async def install_mod(
     skip_download: bool = False,
     local_only: bool = False,
     skip_installed: bool = True,
+    pin: FilePin | None = None,
 ) -> str:
     """下载（或本地回退）并安装模组。"""
     await ensure_mod_in_inventory(mod_id)
@@ -487,7 +532,7 @@ async def install_mod(
         register_local_archive(mod_id, local)
         used_local = True
     elif not skip_download:
-        dl_result = await download_mod(mod_id)
+        dl_result = await download_mod(mod_id, pin=pin)
         if is_error(dl_result):
             data = json.loads(dl_result)
             if data.get("premium_only") and allow_local_fallback:
@@ -529,6 +574,7 @@ async def install_mod_with_dependencies(
     allow_local_fallback: bool = True,
     local_only: bool = False,
     skip_installed: bool = True,
+    pin: FilePin | None = None,
 ) -> str:
     """安装模组及其缺失的前置依赖。"""
     await ensure_mod_in_inventory(mod_id)
@@ -587,6 +633,7 @@ async def install_mod_with_dependencies(
         allow_local_fallback=allow_local_fallback,
         local_only=local_only,
         skip_installed=skip_installed,
+        pin=pin,
     )
     if is_error(main_result):
         payload = json.loads(main_result)

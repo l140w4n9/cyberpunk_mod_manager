@@ -52,6 +52,19 @@ def _migrate_columns() -> None:
                 "ALTER TABLE mods ADD COLUMN summary_source VARCHAR DEFAULT ''"
             )
             conn.commit()
+        for col, default in (
+            ("nexus_version_id", "''"),
+            ("nexus_internal_mod_id", "''"),
+            ("nexus_mod_file_id", "''"),
+            ("legacy_mod_requirements", "1"),
+        ):
+            if col not in columns:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE mods ADD COLUMN {col} VARCHAR DEFAULT '{default}'"
+                    if default != "1"
+                    else f"ALTER TABLE mods ADD COLUMN {col} BOOLEAN DEFAULT 1"
+                )
+                conn.commit()
 
 
 def init_db() -> None:

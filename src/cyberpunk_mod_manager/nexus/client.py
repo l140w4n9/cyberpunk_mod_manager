@@ -1,30 +1,43 @@
 # -*- coding: utf-8 -*-
-"""Nexus Mods API 客户端。
-
-参考 Stardrop `Utilities/External/NexusClient.cs` 的实现模式：
-- 使用 API Key 认证（API 与 CDN 下载均携带相同请求头）
-- 通过 mod_id 查询模组详情与文件列表
-- 获取下载链接并下载文件
-"""
+"""Nexus Mods API 客户端（v3 REST + GraphQL，下载走遗留 v1 shim）。"""
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-import aiofiles
 import httpx
 
 from ..config import config
-from .schemas import ModDetails, ModFile, ModFilesResponse, DownloadLink
+from ._legacy_v1 import (
+    _pick_download_link,
+    download_from_cdn,
+    fetch_download_links,
+    get_tracked_mod_ids,
+    get_updated_mods,
+    validate_user,
+)
+from .schemas import (
+    FilePin,
+    MaterializedDependency,
+    ModBatchInfo,
+    ModDetails,
+    ModFile,
+    TrendingMod,
+    UserProfile,
+)
 
-BASE_URL = "https://api.nexusmods.com/v1"
+V3_BASE_URL = "https://api.nexusmods.com/v3"
+GRAPHQL_URL = "https://api.nexusmods.com/v2/graphql"
 GAME_DOMAIN = "cyberpunk2077"
 PREFERRED_CDN = "nexus cdn"
 
+_MOD_URL_RE = re.compile(r"/mods/(\d+)", re.IGNORECASE)
+
+_game_id_cache: int | None = None
+
 
 class NexusAPIError(RuntimeError):
-    """Nexus API 请求失败。"""
-
     def __init__(
         self,
         message: str,
@@ -38,10 +51,6 @@ class NexusAPIError(RuntimeError):
 
 
 def _build_headers(api_key: str) -> dict[str, str]:
-    """构建 Nexus API 请求头。
-
-    注意：不可同时发送 apikey 与 apiKey，Nexus 会因此返回 401。
-    """
     return {
         "apikey": api_key,
         "Application-Name": config.app_name,
@@ -52,7 +61,6 @@ def _build_headers(api_key: str) -> dict[str, str]:
 
 
 def _parse_api_error(response: httpx.Response) -> NexusAPIError:
-    """将 HTTP 错误转为可读异常。"""
     body = response.text
     lower = body.lower()
     is_premium_only = (
@@ -61,17 +69,12 @@ def _parse_api_error(response: httpx.Response) -> NexusAPIError:
         and "download" in lower
     )
     if response.status_code == 401:
-        message = (
-            "Nexus API 401：API Key 无效或未正确配置。"
-            "请在 config.yaml 设置 nexus_api_key，或检查密钥是否已过期。"
-        )
+        message = "Nexus API 401：API Key 无效或未正确配置。"
     elif is_premium_only:
         message = (
             "Nexus API 拒绝下载：非 Premium 账户无法通过 API 获取下载链接。"
-            "请在 Nexus 网站手动下载后，将压缩包放入下载目录再安装。"
+            "请在网站手动下载后放入 downloads 目录。"
         )
-    elif response.status_code == 403:
-        message = f"Nexus API 403 Forbidden: {body or response.reason_phrase}"
     else:
         message = f"Nexus API HTTP {response.status_code}: {body or response.reason_phrase}"
     return NexusAPIError(
@@ -81,44 +84,92 @@ def _parse_api_error(response: httpx.Response) -> NexusAPIError:
     )
 
 
-def _is_main_file(mod_file: ModFile) -> bool:
-    """是否为 Nexus 当前可下载的主文件分类。"""
-    name = (mod_file.category_name or "").strip().upper()
-    if name == "MAIN":
-        return True
-    # category_id 1 在 CP2077 API 中对应 MAIN
-    return mod_file.category_id == 1
+def composite_mod_uid(game_scoped_mod_id: int, game_id: int | None = None) -> str:
+    gid = game_id if game_id is not None else (_game_id_cache or 3333)
+    return str((int(gid) << 32) | int(game_scoped_mod_id))
 
 
-def select_download_file(files: list[ModFile]) -> ModFile | None:
-    """从文件列表中选出应下载的文件（优先最新 MAIN，避免旧版归档）。"""
-    if not files:
+def parse_mod_id_from_url(url: str) -> int:
+    match = _MOD_URL_RE.search(url or "")
+    return int(match.group(1)) if match else 0
+
+
+def _version_to_mod_file(version: dict[str, Any]) -> ModFile:
+    game_scoped = version.get("game_scoped_id")
+    try:
+        file_id = int(game_scoped)
+    except (TypeError, ValueError):
+        file_id = 0
+    uploaded = version.get("uploaded_at") or ""
+    uploaded_ts = None
+    if uploaded:
+        try:
+            from datetime import datetime
+
+            uploaded_ts = int(
+                datetime.fromisoformat(uploaded.replace("Z", "+00:00")).timestamp()
+            )
+        except ValueError:
+            uploaded_ts = None
+    file_obj = version.get("file") or {}
+    return ModFile(
+        file_id=file_id,
+        file_name=version.get("name") or file_obj.get("name"),
+        version=version.get("version"),
+        category_name=(version.get("category") or "").upper(),
+        is_primary=bool(version.get("is_primary")),
+        uploaded_timestamp=uploaded_ts,
+        version_id=str(version.get("id") or ""),
+        mod_file_id=str(file_obj.get("id") or ""),
+        category=str(version.get("category") or ""),
+        uploaded_at=str(uploaded),
+        position=str(version.get("position") or ""),
+    )
+
+
+def _pick_latest_version(versions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not versions:
         return None
-    for mod_file in files:
-        if mod_file.is_primary:
-            return mod_file
-
-    main_files = [f for f in files if _is_main_file(f)]
-    pool = main_files or list(files)
-
-    def sort_key(mod_file: ModFile) -> tuple[int, int]:
-        return (mod_file.uploaded_timestamp or 0, mod_file.file_id)
-
-    return max(pool, key=sort_key)
+    active = [
+        v
+        for v in versions
+        if (v.get("category") or "").lower()
+        in {"main", "update", "optional", "miscellaneous"}
+    ]
+    pool = active or versions
+    return max(pool, key=lambda v: (v.get("uploaded_at") or "", v.get("position") or ""))
 
 
-def _pick_download_link(links: list[DownloadLink]) -> DownloadLink:
-    if not links:
-        raise NexusAPIError("Nexus API 未返回可用下载链接")
-    for link in links:
-        name = (link.short_name or link.name or "").lower()
-        if name == PREFERRED_CDN:
-            return link
-    return links[0]
+def parse_materialized_dependencies(payload: dict[str, Any]) -> list[MaterializedDependency]:
+    results: list[MaterializedDependency] = []
+    for definition in payload.get("dependencies") or []:
+        definition_id = str(definition.get("id") or "")
+        for candidate in definition.get("candidate_mod_files") or []:
+            mod = candidate.get("mod") or {}
+            game_scoped = mod.get("game_scoped_id")
+            if not game_scoped:
+                continue
+            try:
+                mod_id = int(game_scoped)
+            except (TypeError, ValueError):
+                continue
+            best = _pick_latest_version(candidate.get("candidate_versions") or [])
+            results.append(
+                MaterializedDependency(
+                    definition_id=definition_id,
+                    mod_id=mod_id,
+                    name=str(mod.get("name") or "").strip(),
+                    mod_file_id=str(candidate.get("id") or ""),
+                    version_id=str(best.get("id") or "") if best else "",
+                    version=str(best.get("version") or "") if best else "",
+                )
+            )
+            break
+    return results
 
 
 class NexusClient:
-    """Nexus Mods API 客户端。"""
+    """Nexus Mods 统一客户端。"""
 
     def __init__(self, api_key: str | None = None) -> None:
         self.api_key = api_key or config.nexus_api_key
@@ -128,7 +179,7 @@ class NexusClient:
             )
         self._headers = _build_headers(self.api_key)
         self._client = httpx.AsyncClient(
-            base_url=BASE_URL,
+            base_url=V3_BASE_URL,
             headers=self._headers,
             timeout=60.0,
             follow_redirects=True,
@@ -138,115 +189,324 @@ class NexusClient:
         return self
 
     async def __aexit__(self, *exc) -> None:
-        await self._client.aclose()
+        await self.close()
 
     async def close(self) -> None:
         await self._client.aclose()
 
     async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
         response = await self._client.request(method, url, **kwargs)
+        if response.status_code == 404:
+            return response
         if response.is_error:
             raise _parse_api_error(response)
         return response
 
-    async def validate_key(self) -> bool:
-        """校验 API Key 是否有效。
+    async def _get_json(self, path: str) -> dict[str, Any]:
+        response = await self._request("GET", path)
+        if response.status_code == 404:
+            return {}
+        return response.json()
 
-        仅当返回 401（密钥确实无效）时返回 ``False``；
-        5xx 服务器错误或 429 限流等瞬态错误会重新抛出，
-        避免误导用户以为密钥无效。
-        """
+    async def _post_json(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        response = await self._request("POST", path, json=body)
+        return response.json()
+
+    async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                GRAPHQL_URL,
+                headers={**self._headers, "Content-Type": "application/json"},
+                json={"query": query, "variables": variables or {}},
+            )
+        if response.is_error:
+            raise NexusAPIError(
+                f"Nexus GraphQL HTTP {response.status_code}: {response.text[:300]}"
+            )
+        body = response.json()
+        if body.get("errors"):
+            messages = "; ".join(
+                err.get("message", str(err)) for err in body["errors"]
+            )
+            raise NexusAPIError(f"Nexus GraphQL 错误: {messages}")
+        return body.get("data") or {}
+
+    async def get_game_id(self) -> int:
+        global _game_id_cache
+        if _game_id_cache is not None:
+            return _game_id_cache
+        data = await self._graphql(
+            "query($d: String!) { game(domainName: $d) { id } }",
+            {"d": GAME_DOMAIN},
+        )
+        node = data.get("game") or {}
+        _game_id_cache = int(node.get("id") or 3333)
+        return _game_id_cache
+
+    async def validate_key(self) -> bool:
         try:
-            await self._request("GET", "/users/validate.json")
-            return True
-        except NexusAPIError as exc:
-            if exc.status_code == 401:
-                return False
-            raise
+            profile = await validate_user(self.api_key, self._headers)
+            return profile is not None
+        except Exception:
+            return False
+
+    async def get_user_profile(self) -> UserProfile | None:
+        return await validate_user(self.api_key, self._headers)
+
+    async def resolve_mod_internal_id(self, game_scoped_mod_id: int) -> str:
+        data = await self._get_json(f"/games/{GAME_DOMAIN}/mods/{game_scoped_mod_id}")
+        return str((data.get("data") or {}).get("id") or "")
 
     async def get_mod_details(self, mod_id: int) -> ModDetails:
-        """获取模组详情。"""
-        resp = await self._request(
-            "GET",
-            f"/games/{GAME_DOMAIN}/mods/{mod_id}.json",
+        game_id = await self.get_game_id()
+        gql = await self._graphql(
+            """
+            query ModDetail($modId: ID!, $gameId: ID!) {
+              mod(modId: $modId, gameId: $gameId) {
+                name summary description author version pictureUrl
+                legacyModRequirementsEnabled
+              }
+            }
+            """,
+            {"modId": str(mod_id), "gameId": str(game_id)},
         )
-        data = resp.json()
+        node = gql.get("mod") or {}
+        batch = await self.get_mods_batch([mod_id])
+        batch_info = batch.get(mod_id)
+        internal_id = await self.resolve_mod_internal_id(mod_id)
         return ModDetails(
-            mod_id=data.get("mod_id", mod_id),
-            name=data.get("name", ""),
-            summary=data.get("summary", ""),
-            description=data.get("description", ""),
-            author=data.get("author", ""),
-            version=data.get("version", ""),
-            picture_url=data.get("picture_url", ""),
-            mod_page_url=(
-                f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{mod_id}"
-            ),
-            category_id=data.get("category_id", 0),
-            endorsement_count=data.get("endorsement_count", 0),
+            mod_id=mod_id,
+            name=str(node.get("name") or batch_info.name if batch_info else ""),
+            summary=str(node.get("summary") or batch_info.summary if batch_info else ""),
+            description=str(node.get("description") or ""),
+            author=str(node.get("author") or ""),
+            version=str(node.get("version") or ""),
+            picture_url=str(node.get("pictureUrl") or ""),
+            mod_page_url=f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{mod_id}",
+            internal_mod_id=internal_id,
+            status=batch_info.status if batch_info else "",
+            adult_content=batch_info.adult_content if batch_info else False,
+            legacy_mod_requirements=bool(node.get("legacyModRequirementsEnabled", True)),
         )
 
-    async def get_mod_files(self, mod_id: int) -> list[ModFile]:
-        """获取模组的文件列表。"""
-        resp = await self._request(
-            "GET",
-            f"/games/{GAME_DOMAIN}/mods/{mod_id}/files.json",
+    async def get_mods_batch(
+        self, mod_ids: list[int]
+    ) -> dict[int, ModBatchInfo]:
+        if not mod_ids:
+            return {}
+        game_id = await self.get_game_id()
+        payload = await self._post_json(
+            "/mods/batch",
+            {"mod_ids": [composite_mod_uid(mid, game_id) for mid in mod_ids]},
         )
-        parsed = ModFilesResponse(**resp.json())
-        return parsed.files
+        result: dict[int, ModBatchInfo] = {}
+        for row in (payload.get("data") or {}).get("mods") or []:
+            composite = str(row.get("id") or "")
+            try:
+                scoped = int(composite) & 0xFFFFFFFF
+            except ValueError:
+                scoped = parse_mod_id_from_url(str(row.get("mod_page_url") or ""))
+            if not scoped:
+                continue
+            result[scoped] = ModBatchInfo(
+                composite_id=composite,
+                game_id=str(row.get("game_id") or game_id),
+                mod_id=scoped,
+                name=str(row.get("name") or ""),
+                summary=str(row.get("summary") or ""),
+                status=str(row.get("status") or ""),
+                adult_content=bool(row.get("adult_content")),
+                thumbnail_url=str(row.get("thumbnail_url") or ""),
+            )
+        return result
+
+    async def get_trending_mods(self) -> list[TrendingMod]:
+        data = await self._get_json(f"/games/{GAME_DOMAIN}/trending-mods")
+        items: list[TrendingMod] = []
+        for row in (data.get("data") or {}).get("mods") or []:
+            url = str(row.get("mod_page_url") or "")
+            items.append(
+                TrendingMod(
+                    name=str(row.get("name") or ""),
+                    author=str(row.get("author") or ""),
+                    summary=str(row.get("summary") or ""),
+                    picture_url=str(row.get("picture_url") or ""),
+                    mod_page_url=url,
+                    mod_id=parse_mod_id_from_url(url),
+                )
+            )
+        return items
+
+    async def get_tracked_mod_ids(self) -> list[int]:
+        return await get_tracked_mod_ids(GAME_DOMAIN, self._headers)
+
+    async def get_updated_mod_feed(self, *, period: str = "1w") -> list[dict[str, Any]]:
+        return await get_updated_mods(GAME_DOMAIN, self._headers, period=period)
+
+    async def get_mod_files_v3(self, internal_mod_id: str) -> list[dict[str, Any]]:
+        data = await self._get_json(f"/mods/{internal_mod_id}/files")
+        return (data.get("data") or {}).get("mod_files") or []
+
+    async def get_mod_file_versions(self, mod_file_id: str) -> list[dict[str, Any]]:
+        data = await self._get_json(f"/mod-files/{mod_file_id}/versions")
+        return (data.get("data") or {}).get("versions") or []
+
+    async def get_mod_file_version(self, version_id: str) -> dict[str, Any]:
+        data = await self._get_json(f"/mod-file-versions/{version_id}")
+        return data.get("data") or {}
+
+    async def get_mod_file_versions_batch(
+        self, version_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        if not version_ids:
+            return []
+        data = await self._post_json(
+            "/mod-file-versions/batch",
+            {"version_ids": version_ids},
+        )
+        return (data.get("data") or {}).get("versions") or []
+
+    async def get_materialized_dependencies(
+        self, version_id: str
+    ) -> list[MaterializedDependency]:
+        data = await self._get_json(
+            f"/mod-file-versions/{version_id}/dependencies/materialized"
+        )
+        return parse_materialized_dependencies(data)
+
+    async def get_dependency_ranges(self, version_id: str) -> dict[str, Any]:
+        """获取指定文件版本的依赖范围定义（v3）。"""
+        return await self._get_json(
+            f"/mod-file-versions/{version_id}/dependencies/ranges"
+        )
+
+    async def get_materialized_dependencies_batch(
+        self, version_ids: list[str]
+    ) -> dict[str, list[MaterializedDependency]]:
+        if not version_ids:
+            return {}
+        grouped: dict[str, list[MaterializedDependency]] = {vid: [] for vid in version_ids}
+        page = 1
+        while True:
+            data = await self._post_json(
+                "/mod-file-versions/dependencies/materialized/batch",
+                {
+                    "version_ids": version_ids,
+                    "page": page,
+                    "page_size": 1000,
+                },
+            )
+            candidates = (data.get("data") or {}).get("candidates") or []
+            if not candidates:
+                break
+            for row in candidates:
+                source = str(row.get("source_version_id") or "")
+                try:
+                    mod_id = int(row.get("mod_id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if not mod_id:
+                    continue
+                grouped.setdefault(source, []).append(
+                    MaterializedDependency(
+                        definition_id=str(row.get("definition_id") or ""),
+                        mod_id=mod_id,
+                        name="",
+                        mod_file_id=str(row.get("mod_file_id") or ""),
+                        version_id=str(row.get("version_id") or ""),
+                        version="",
+                    )
+                )
+            meta = data.get("meta") or {}
+            total = int(meta.get("total_count") or 0)
+            page_size = int(meta.get("page_size") or 1000)
+            if page * page_size >= total:
+                break
+            page += 1
+        return grouped
+
+    async def resolve_target_version(
+        self,
+        mod_id: int,
+        *,
+        pin: FilePin | None = None,
+        version_id: str | None = None,
+    ) -> ModFile | None:
+        if pin and pin.version_id:
+            version = await self.get_mod_file_version(pin.version_id)
+            if version:
+                mf = _version_to_mod_file(version)
+                mf.internal_mod_id = await self.resolve_mod_internal_id(mod_id)
+                return mf
+        if version_id:
+            version = await self.get_mod_file_version(version_id)
+            if version:
+                mf = _version_to_mod_file(version)
+                mf.internal_mod_id = await self.resolve_mod_internal_id(mod_id)
+                return mf
+        if pin and pin.game_scoped_file_id:
+            internal = await self.resolve_mod_internal_id(mod_id)
+            if not internal:
+                return None
+            for mod_file in await self.get_mod_files_v3(internal):
+                versions = await self.get_mod_file_versions(str(mod_file["id"]))
+                for ver in versions:
+                    mf = _version_to_mod_file(ver)
+                    if mf.file_id == pin.game_scoped_file_id:
+                        if pin.version_string and mf.version != pin.version_string:
+                            continue
+                        mf.internal_mod_id = internal
+                        return mf
+        internal = await self.resolve_mod_internal_id(mod_id)
+        if not internal:
+            return None
+        mod_files = await self.get_mod_files_v3(internal)
+        if not mod_files:
+            return None
+        primary = next((f for f in mod_files if f.get("is_primary")), mod_files[0])
+        versions = await self.get_mod_file_versions(str(primary["id"]))
+        latest = _pick_latest_version(versions)
+        if not latest:
+            return None
+        mf = _version_to_mod_file(latest)
+        mf.internal_mod_id = internal
+        return mf
 
     async def pick_primary_file(self, mod_id: int) -> Optional[ModFile]:
-        """选择应下载的文件（优先 is_primary，否则最新 MAIN 分类）。"""
-        files = await self.get_mod_files(mod_id)
-        return select_download_file(files)
-
-    async def get_download_links(
-        self, mod_id: int, file_id: int
-    ) -> list[DownloadLink]:
-        """获取指定文件的下载链接。"""
-        resp = await self._request(
-            "GET",
-            f"/games/{GAME_DOMAIN}/mods/{mod_id}/files/{file_id}/download_link.json",
-        )
-        data = resp.json()
-        return [DownloadLink(**item) for item in data]
+        return await self.resolve_target_version(mod_id)
 
     async def download_file(
-        self, mod_id: int, file_id: int, dest_dir: Path,
+        self,
+        mod_id: int,
+        file_id: int,
+        dest_dir: Path,
         file_name: str | None = None,
     ) -> Path:
-        """下载模组文件到 dest_dir，返回本地文件路径。
-
-        若调用方已知 ``file_name``（例如来自 ``pick_primary_file``），
-        可直接传入以避免一次多余的 ``get_mod_files`` 请求，节省 API 配额。
-        """
-        links = await self.get_download_links(mod_id, file_id)
+        links = await fetch_download_links(
+            GAME_DOMAIN, mod_id, file_id, self._headers
+        )
         link = _pick_download_link(links)
-        url = link.URI
-        if not file_name:
-            files = await self.get_mod_files(mod_id)
-            file_name = next(
-                (f.file_name for f in files if f.file_id == file_id),
-                f"{mod_id}_{file_id}.zip",
-            )
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / Path(file_name or f"{mod_id}_{file_id}.zip").name
         if dest.exists():
             dest.unlink()
-
-        # 与 Stardrop 一致：CDN 下载也使用带 apiKey 的同一客户端
         try:
-            async with self._client.stream("GET", url) as response:
-                if response.is_error:
-                    # 流式响应体尚未读取，需先 aread() 才能访问 response.text
-                    await response.aread()
-                    raise _parse_api_error(response)
-                async with aiofiles.open(dest, "wb") as fh:
-                    async for chunk in response.aiter_bytes():
-                        await fh.write(chunk)
+            await download_from_cdn(link.URI, dest, self._headers)
         except Exception:
-            # 下载中途失败时删除残留的半成品文件，防止后续误用
             if dest.exists():
                 dest.unlink()
             raise
         return dest
+
+
+def select_download_file(files: list[ModFile]) -> ModFile | None:
+    """兼容旧调用：从 ModFile 列表选主文件。"""
+    if not files:
+        return None
+    for mod_file in files:
+        if mod_file.is_primary:
+            return mod_file
+    return max(
+        files,
+        key=lambda f: (f.uploaded_timestamp or 0, f.file_id),
+    )

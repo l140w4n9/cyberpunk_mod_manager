@@ -36,10 +36,14 @@ class Mod(SQLModel, table=True):
     summary_line: str = ""
     # 摘要来源：ai / fallback / empty（区分 LLM 生成与本地截取）
     summary_source: str = ""
-    # Nexus 文件 id（最近一次下载的文件）
+    # Nexus 文件 id（game_scoped，用于下载）
     nexus_file_id: int | None = None
     file_name: str = ""
-    # 本地下载文件路径（相对 downloads_dir）
+    # v3 版本与内部 ID
+    nexus_version_id: str = ""
+    nexus_internal_mod_id: str = ""
+    nexus_mod_file_id: str = ""
+    legacy_mod_requirements: bool = True
     local_path: str = ""
     status: ModStatus = Field(default=ModStatus.NOT_INSTALLED, index=True)
     # 启用/禁用开关（独立于 status，避免与状态枚举重复表达"禁用"语义）

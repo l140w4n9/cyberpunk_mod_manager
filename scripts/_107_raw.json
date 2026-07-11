@@ -1,0 +1,36 @@
+{
+  "name": "Cyber Engine Tweaks",
+  "summary": "Scripting framework for modders and quality of life fixes.",
+  "description": "[size=3][url=https://wiki.redmodding.org/cyber-engine-tweaks/getting-started/installing][u][size=3]Please read the Wiki![/size][/u][/url]\n<br />\n<br />[/size][b]Cyber Engine Tweaks[/b] is a framework giving modders a way to script mods using [url=https://www.lua.org/]Lua [/url]with access to all the internal scripting features, it also comes with a UI to configure the different mods you are using or using the console directly. It also adds some in game patches for quality of life (for example it fixed the security flaw that was then fixed with the 1.12 patch of the game), all of which can be enabled/disabled through the settings menu or config files.\n<br />\n<br />As it stands the recommended method of installation is manual installation, however you can use vortex. Just drop the content of the zip file in the root folder of your game install.\n<br /> When installing through vortex, make sure to use hardlink deployment.\n<br />If you wish to install manually please read the instructions on the [url=https://wiki.redmodding.org/cyber-engine-tweaks/getting-started/installing]wiki [/url].\n<br />\n<br />[b][size=4]IMPORTANT!!!\n<br />[/size]You may need to install the latest Visual C++ Redistributable for the mod to run, you can get it at[/b] [url=https://aka.ms/vs/17/release/vc_redist.x64.exe]https://aka.ms/vs/17/release/vc_redist.x64.exe[/url]\n<br />\n<br />No support will be provided here by developers, if you need help join us on [url=https://discord.gg/Epkq79kd96]discord [/url]﻿after having read the troubleshooting guide on the [url=https://wiki.redmodding.org/cyber-engine-tweaks/getting-started/installing/troubleshooting]wiki[/url]. Issues posted here are also not considered, if you want to report a bug do so [url=https://github.com/yamashi/CyberEngineTweaks/issues]here[/url]﻿. This is for posting actual bugs, not user error. \n<br />\n<br />If you are a C++ developer and/or reverse engineer, you can contribute on [url=https://github.com/maximegmd/CyberEngineTweaks]github[/url].\n<br />\n<br />[size=4][b]Supported version:[/b] [color=#00ffff][b]2.31[/b][/color][/size]\n<br />[b]\n<br />Bitcoin[/b]: bc1q0neujk5e8v8sc3934ajn8z8zav7hl6557fjj54\n<br />[b]Bitcoin Cash[/b]: qps5ze9p8fxmu4rszyxwy3g0ctlmrhvc3uqq0fzsnl\n<br />[b]Dogecoin[/b]: DMoReR33D87D6rYeUkyQb2BsEHJTqfBFva\n<br />[b]Ethereum[/b]: 0x7Cd23BE1C507Da85ABF0B05c7A3C03e6d3d0233B[url=https://www.patreon.com/tiltedphoques]\n<br />\n<br />[/url]Thanks everyone for the donations, your support means a lot! A special shout-out to the anonymous bitcoin donator, you are crazy!",
+  "picture_url": "https://staticdelivery.nexusmods.com/mods/3333/images/107/107-1613641770-185635979.png",
+  "mod_downloads": 17107102,
+  "mod_unique_downloads": 4710050,
+  "uid": 14315125997675,
+  "mod_id": 107,
+  "game_id": 3333,
+  "allow_rating": true,
+  "domain_name": "cyberpunk2077",
+  "category_id": 12,
+  "version": "1.37.1",
+  "endorsement_count": 226963,
+  "created_timestamp": 1607812774,
+  "created_time": "2020-12-12T22:39:34.000+00:00",
+  "updated_timestamp": 1759193708,
+  "updated_time": "2025-09-30T00:55:08.000+00:00",
+  "author": "yamashi",
+  "uploaded_by": "yamashi",
+  "uploaded_users_profile_url": "https://www.nexusmods.com/users/3386513",
+  "contains_adult_content": false,
+  "status": "published",
+  "available": true,
+  "user": {
+    "member_id": 3386513,
+    "member_group_id": 27,
+    "name": "yamashi"
+  },
+  "endorsement": {
+    "endorse_status": "Undecided",
+    "timestamp": null,
+    "version": null
+  }
+}

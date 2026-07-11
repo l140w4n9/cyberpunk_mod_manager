@@ -32,6 +32,7 @@ query CollectionRevision($slug: String!, $domainName: String!) {
       optional
       file {
         fileId
+        uid
         name
         version
         mod {
@@ -60,6 +61,8 @@ class CollectionModEntry:
     optional: bool
     collection_file_name: str = ""
     collection_file_version: str = ""
+    collection_file_id: int = 0
+    collection_version_id: str = ""
 
 
 @dataclass
@@ -147,6 +150,8 @@ async def fetch_collection(slug: str, domain: str = GAME_DOMAIN) -> CollectionIn
                 optional=bool(item.get("optional")),
                 collection_file_name=str(file_obj.get("name") or ""),
                 collection_file_version=str(file_obj.get("version") or ""),
+                collection_file_id=int(file_obj.get("fileId") or 0),
+                collection_version_id=str(file_obj.get("uid") or ""),
             )
         )
 

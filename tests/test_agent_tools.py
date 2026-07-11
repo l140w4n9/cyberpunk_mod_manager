@@ -27,6 +27,10 @@ def test_toolkit_has_all_tools() -> None:
         "list_pending_mods",
         "list_incomplete_mods",
         "check_mod_updates",
+        "fetch_trending_mods",
+        "sync_tracked_mods",
+        "fetch_updated_mod_feed",
+        "batch_mod_status",
         "audit_installation",
         "get_uninstall_plan_tool",
     ]
@@ -48,4 +52,4 @@ def test_build_agent_without_model_call() -> None:
     agent = build_agent(mock_model)
     assert agent.name == "CyberpunkModAgent"
     schemas = asyncio.run(agent.toolkit.get_tool_schemas())
-    assert len(schemas) == 15
+    assert len(schemas) == 19

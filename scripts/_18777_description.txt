@@ -1,0 +1,24 @@
+This mod adds a purchasable version of rebeccas apartment from the cyberpunk edgerunners anime to the game
+[color=#00ffff][size=2][b]Basics[/b][/size][/color]
+<br />[list]
+<br />[*]This mod adds a purchasable version of rebeccas apartment to the game with sit, sleep, shower, mirror, stash, guitar, eating, drinking&amp;smoking, coffee, tea, meditation and tv watching interactions
+<br />[*]this is the successor to [url=https://www.nexusmods.com/cyberpunk2077/mods/7871]Rebecca's Apartment [/url] which was set to hidden a long time ago
+<br />[/list]
+<br />[b][color=#00ffff]Usage[/color][/b]
+<br />[list]
+<br />[*]Find the apartment purchase icon on the map and go there to pay at the door
+<br />[/list]
+<br />[size=2][b][color=#00ffff]Features[/color][/b]
+<br />[list]
+<br />[*]Ownable room with sit, sleep, shower, mirror, guitar, eating, drinking&amp;smoking, coffee, tea, meditation and tv watching interactions
+<br />[*]purchase price is 30000 eddies
+<br />[*]this is a complete addon so it does not conflict with anything
+<br />[/list]
+<br />[b][color=#00ffff]Donation link[/color][/b]
+<br />[/size]Like my mods? consider donating [url=https://buymeacoffee.com/krat0es]donation link[/url]
+<br />
+<br />[b][color=#00ffff]Installation [/color][/b]
+<br />drag and drop the folder into your game directory
+<br />
+<br />[b][color=#00ffff]Uninstallation[/color][/b]
+<br />you can look inside the zip to know which files you need to delete

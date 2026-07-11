@@ -5,15 +5,59 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+import httpx
 from sqlmodel import select
 
+from ..config import config
 from ..models import Mod, ModDependency
 from ..services.concurrency import DEFAULT_CONCURRENCY, gather_bounded
 from ..storage.db import get_session
-from .client import NexusClient
+from .client import GAME_DOMAIN, GRAPHQL_URL, _build_headers, NexusClient
+
+MOD_REQUIREMENTS_QUERY = """
+query ModRequirements($modId: ID!, $gameId: ID!) {
+  mod(modId: $modId, gameId: $gameId) {
+    legacyModRequirementsEnabled
+    modRequirements {
+      nexusRequirements {
+        nodes {
+          modId
+          modName
+          notes
+          externalRequirement
+          url
+        }
+      }
+    }
+  }
+}
+"""
+
+OPTIONAL_NOTES_RE = re.compile(
+    r"\b(optional|recommended|recommend|可选|推荐)\b",
+    re.IGNORECASE,
+)
+
+_game_id_cache: int | None = None
 
 NEXUS_MOD_LINK_RE = re.compile(
-    r"nexusmods\.com/cyberpunk2077/mods/(\d+)",
+    r"nexusmods\.com/(?:games/)?cyberpunk2077/mods/(\d+)",
+    re.IGNORECASE,
+)
+
+# 描述里指向其他模组但非前置依赖的语境（如前作、致谢、捐赠等）
+NON_DEPENDENCY_CONTEXT_RE = re.compile(
+    r"(successor\s+to|predecessor|replacing|replaced\s+by|old\s+version|"
+    r"previous\s+version|also\s+see|my\s+other\s+mod|credit|thanks\s+to|"
+    r"donat|buy\s*me\s*a\s*coffee|inspired\s+by|similar\s+to|"
+    r"which\s+was\s+set\s+to\s+hidden|hidden\s+a\s+long\s+time\s+ago|"
+    r"前身|旧版|捐赠|感谢)",
+    re.IGNORECASE,
+)
+
+REQUIREMENT_CONTEXT_RE = re.compile(
+    r"(require|required|dependency|dependencies|prerequisite|needs?|must\s+have|"
+    r"install\s+first|before\s+install|mandatory|前置|依赖|必装|需要先安装)",
     re.IGNORECASE,
 )
 
@@ -75,6 +119,167 @@ class DependentInfo:
         }
 
 
+def _is_non_dependency_context(text: str, match_start: int) -> bool:
+    window = text[max(0, match_start - 160): match_start + 40]
+    return bool(NON_DEPENDENCY_CONTEXT_RE.search(window))
+
+
+def _is_requirement_context(text: str, match_start: int) -> bool:
+    window = text[max(0, match_start - 200): match_start + 80]
+    return bool(REQUIREMENT_CONTEXT_RE.search(window))
+
+
+async def _get_game_id() -> int | None:
+    """查询 cyberpunk2077 的 GraphQL gameId（带内存缓存）。"""
+    global _game_id_cache
+    if _game_id_cache is not None:
+        return _game_id_cache
+    headers = {
+        **_build_headers(config.nexus_api_key),
+        "Content-Type": "application/json",
+    }
+    query = """
+    query GameId($domain: String!) {
+      game(domainName: $domain) {
+        id
+        domainName
+      }
+    }
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                GRAPHQL_URL,
+                headers=headers,
+                json={"query": query, "variables": {"domain": GAME_DOMAIN}},
+            )
+        if response.is_error:
+            return None
+        body = response.json()
+        node = body.get("data", {}).get("game")
+        if node and (node.get("domainName") or "").lower() == GAME_DOMAIN:
+            _game_id_cache = int(node["id"])
+            return _game_id_cache
+    except Exception:
+        return None
+    return None
+
+
+def _nexus_requirement_source(notes: str, external: bool) -> str:
+    if external:
+        return "external"
+    if OPTIONAL_NOTES_RE.search(notes or ""):
+        return "optional"
+    return "nexus"
+
+
+async def fetch_materialized_mod_dependencies(
+    game_scoped_mod_id: int,
+    *,
+    version_id: str | None = None,
+) -> list[dict]:
+    """通过 v3 物化依赖 API 获取文件级前置。"""
+    try:
+        async with NexusClient() as client:
+            target_version = version_id
+            if not target_version:
+                primary = await client.resolve_target_version(game_scoped_mod_id)
+                target_version = primary.version_id if primary else None
+            if not target_version:
+                return []
+            deps = await client.get_materialized_dependencies(target_version)
+    except Exception:
+        return []
+
+    return [
+        {
+            "mod_id": dep.mod_id,
+            "name": dep.name,
+            "source": "materialized",
+            "definition_id": dep.definition_id,
+            "version_id": dep.version_id,
+            "version": dep.version,
+        }
+        for dep in deps
+    ]
+
+
+async def fetch_materialized_dependencies_batch(
+    version_ids: list[str],
+) -> dict[str, list[dict]]:
+    if not version_ids:
+        return {}
+    try:
+        async with NexusClient() as client:
+            grouped = await client.get_materialized_dependencies_batch(version_ids)
+    except Exception:
+        return {}
+    result: dict[str, list[dict]] = {}
+    for source_id, deps in grouped.items():
+        result[source_id] = [
+            {
+                "mod_id": dep.mod_id,
+                "name": dep.name,
+                "source": "materialized",
+                "definition_id": dep.definition_id,
+                "version_id": dep.version_id,
+            }
+            for dep in deps
+        ]
+    return result
+
+
+async def fetch_nexus_mod_requirements(mod_id: int) -> list[dict]:
+    """从 Nexus GraphQL 拉取作者在页面上登记的 Nexus requirements（legacy 模型）。"""
+    game_id = await _get_game_id()
+    if game_id is None:
+        return []
+    headers = {
+        **_build_headers(config.nexus_api_key),
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "query": MOD_REQUIREMENTS_QUERY,
+        "variables": {"modId": str(mod_id), "gameId": str(game_id)},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(GRAPHQL_URL, headers=headers, json=payload)
+        if response.is_error:
+            return []
+        body = response.json()
+        if body.get("errors"):
+            return []
+        mod_node = body.get("data", {}).get("mod") or {}
+        nodes = (
+            mod_node.get("modRequirements", {})
+            .get("nexusRequirements", {})
+            .get("nodes", [])
+        )
+        legacy_enabled = mod_node.get("legacyModRequirementsEnabled")
+    except Exception:
+        return []
+
+    deps: list[dict] = []
+    for node in nodes:
+        if node.get("externalRequirement"):
+            continue
+        dep_id = int(node.get("modId") or 0)
+        if not dep_id or dep_id == mod_id:
+            continue
+        notes = str(node.get("notes") or "")
+        deps.append(
+            {
+                "mod_id": dep_id,
+                "name": str(node.get("modName") or "").strip(),
+                "source": _nexus_requirement_source(notes, False),
+                "notes": notes,
+                "legacy_requirements": legacy_enabled,
+            }
+        )
+    return deps
+
+
 def _resolve_dep_source(owner_mod_id: int, dep_id: int, text: str, match_start: int) -> str:
     if dep_id in OPTIONAL_DEPENDENCY_IDS.get(owner_mod_id, set()):
         return "optional"
@@ -89,6 +294,7 @@ def parse_dependencies_from_text(
     *,
     exclude_mod_id: int | None = None,
     owner_mod_id: int | None = None,
+    strict: bool = False,
 ) -> list[dict]:
     """从描述/HTML 文本中解析 Nexus 模组链接。"""
     found: dict[int, dict] = {}
@@ -96,10 +302,15 @@ def parse_dependencies_from_text(
         dep_id = int(match.group(1))
         if exclude_mod_id and dep_id == exclude_mod_id:
             continue
+        match_start = match.start()
+        if _is_non_dependency_context(text or "", match_start):
+            continue
+        if strict and not _is_requirement_context(text or "", match_start):
+            continue
         source = "parsed"
         if owner_mod_id is not None:
             source = _resolve_dep_source(
-                owner_mod_id, dep_id, text or "", match.start()
+                owner_mod_id, dep_id, text or "", match_start
             )
         found.setdefault(
             dep_id,
@@ -195,16 +406,53 @@ def _resolve_dep_name(session, rec: ModDependency, dep_mod: Mod | None) -> str:
     return name
 
 
-async def collect_dependencies(mod_id: int, description: str = "", summary: str = "") -> list[dict]:
-    """汇总解析结果与内置已知依赖。"""
+async def collect_dependencies(
+    mod_id: int,
+    description: str = "",
+    summary: str = "",
+    *,
+    version_id: str | None = None,
+) -> list[dict]:
+    """汇总 v3 物化依赖、GraphQL legacy requirements、描述解析与内置已知依赖。
+
+    优先级（高 → 低）：
+    1. v3 ``getModFileVersionDependencyMaterialized``（文件级新模型）
+    2. GraphQL ``nexusRequirements``（legacy 模组级要求）
+    3. ``KNOWN_MOD_DEPENDENCIES`` 硬编码补充
+    4. 描述文本链接解析（有过结构化数据时启用 strict 模式）
+    """
     deps: dict[int, dict] = {}
 
+    materialized = await fetch_materialized_mod_dependencies(
+        mod_id, version_id=version_id
+    )
+    structured_sources = bool(materialized)
+
+    for item in materialized:
+        deps[int(item["mod_id"])] = item
+
+    if not structured_sources:
+        for item in await fetch_nexus_mod_requirements(mod_id):
+            dep_id = int(item.get("mod_id") or 0)
+            if not dep_id:
+                continue
+            deps[dep_id] = item
+        structured_sources = any(
+            d.get("source") in ("nexus", "optional", "materialized")
+            for d in deps.values()
+        )
+
+    combined_text = f"{summary}\n{description}"
     for item in parse_dependencies_from_text(
-        f"{summary}\n{description}",
+        combined_text,
         exclude_mod_id=mod_id,
         owner_mod_id=mod_id,
+        strict=structured_sources,
     ):
-        deps[int(item["mod_id"])] = item
+        dep_id = int(item["mod_id"])
+        if dep_id in deps:
+            continue
+        deps[dep_id] = item
 
     for item in KNOWN_MOD_DEPENDENCIES.get(mod_id, []):
         dep_id = int(item["mod_id"])
@@ -251,6 +499,9 @@ def sync_dependencies(owner_internal_id: int, dep_items: list[dict]) -> None:
         ).all():
             session.delete(old)
         for item in dep_items:
+            dep_id = int(item.get("mod_id") or 0)
+            if dep_id <= 0:
+                continue
             session.add(
                 ModDependency(
                     owner_mod_id=owner_internal_id,
@@ -307,11 +558,11 @@ def get_dependency_infos(owner_nexus_mod_id: int) -> list[DependencyInfo]:
 
 
 def missing_dependencies(owner_nexus_mod_id: int) -> list[DependencyInfo]:
-    """未安装的必装前置依赖（不含 optional）。"""
+    """未安装的必装前置依赖（不含 optional / external）。"""
     return [
         d
         for d in get_dependency_infos(owner_nexus_mod_id)
-        if not d.installed and d.source != "optional"
+        if not d.installed and d.source not in ("optional", "external")
     ]
 
 

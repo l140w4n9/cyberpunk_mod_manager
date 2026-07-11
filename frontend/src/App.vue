@@ -45,6 +45,8 @@ async function checkHealth() {
       data_dir_configured: data.data_dir_configured,
       nexus_configured: data.nexus_configured,
       nexus_valid: data.nexus_valid,
+      nexus_premium: data.nexus_premium,
+      nexus_user: data.nexus_user || {},
       config_file: data.config_file || '',
     }
   } catch {

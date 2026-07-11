@@ -7,18 +7,30 @@ function formatNetworkError(error) {
 }
 
 async function request(url, options = {}) {
+  const { timeoutMs = 0, ...fetchOptions } = options
+  let controller
+  let timeoutId
+  if (timeoutMs > 0 && !fetchOptions.signal) {
+    controller = new AbortController()
+    fetchOptions.signal = controller.signal
+    timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  }
+
   let resp
   try {
     resp = await fetch(url, {
-      headers: { 'Content-Type': 'application/json', ...options.headers },
-      ...options,
+      headers: { 'Content-Type': 'application/json', ...fetchOptions.headers },
+      ...fetchOptions,
     })
   } catch (error) {
+    if (timeoutId) clearTimeout(timeoutId)
     if (error?.name === 'AbortError') {
-      throw error
+      throw new Error(timeoutMs > 0 ? `请求超时（${Math.round(timeoutMs / 1000)}s）` : '请求已取消')
     }
     const message = error?.message === 'Failed to fetch' ? formatNetworkError(error) : (error?.message || formatNetworkError(error))
     throw new Error(message)
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
   }
 
   const data = await resp.json().catch(() => ({}))
@@ -147,6 +159,7 @@ export const api = {
     request('/api/collections/parse', {
       method: 'POST',
       body: JSON.stringify({ url }),
+      timeoutMs: 120000,
     }),
   installCollection: (payload) =>
     request('/api/collections/install', {
@@ -180,6 +193,23 @@ export const api = {
   getAuditJob: (jobId) => request(`/api/mods/audit/jobs/${jobId}`),
   startCheckUpdatesJob: () =>
     request('/api/mods/check-updates/start', { method: 'POST' }),
+  getTrendingMods: () => request('/api/mods/discovery/trending'),
+  syncTrackedMods: () =>
+    request('/api/mods/discovery/sync-tracked', { method: 'POST' }),
+  getUpdatedFeed: (period = '1w', compareLocal = true) =>
+    request(
+      `/api/mods/discovery/updated-feed?period=${encodeURIComponent(period)}&compare_local=${compareLocal}`,
+    ),
+  batchModStatus: (modIds) =>
+    request('/api/mods/discovery/batch-status', {
+      method: 'POST',
+      body: JSON.stringify({ mod_ids: modIds }),
+    }),
+  checkCollectionRevision: (slug, knownRevision = null, domain = 'cyberpunk2077') => {
+    const params = new URLSearchParams({ slug, domain })
+    if (knownRevision != null) params.set('known_revision', String(knownRevision))
+    return request(`/api/collections/revision?${params}`)
+  },
   getConfig: async (retries = 2) => {
     let lastError
     for (let attempt = 0; attempt <= retries; attempt += 1) {

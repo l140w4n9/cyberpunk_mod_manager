@@ -38,7 +38,9 @@ def test_upsert_mod_is_idempotent() -> None:
     assert id1 == id2
 
     with get_session() as session:
-        count = len(session.exec(select(Mod)).all())
+        count = len(
+            session.exec(select(Mod).where(Mod.nexus_mod_id == 26500)).all()
+        )
     assert count == 1
 
 

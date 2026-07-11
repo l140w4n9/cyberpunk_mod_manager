@@ -11,7 +11,8 @@ from enum import Enum
 from typing import Any
 
 from ..models import ModStatus
-from ..nexus.collections import CollectionParseError, fetch_collection, parse_collection_url
+from ..nexus.collections import CollectionModEntry, CollectionParseError, fetch_collection, parse_collection_url
+from ..nexus.schemas import FilePin
 from . import mod_ops
 from .concurrency import DEFAULT_CONCURRENCY, gather_bounded
 
@@ -42,6 +43,9 @@ class QueueItem:
     installed: bool = False
     status: str = QueueItemStatus.PENDING.value
     message: str = ""
+    collection_file_id: int = 0
+    collection_version_id: str = ""
+    collection_file_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,7 +57,20 @@ class QueueItem:
             "installed": self.installed,
             "status": self.status,
             "message": self.message,
+            "collection_file_id": self.collection_file_id,
+            "collection_version_id": self.collection_version_id,
+            "collection_file_version": self.collection_file_version,
         }
+
+    def file_pin(self) -> FilePin | None:
+        if not self.collection_version_id and not self.collection_file_id:
+            return None
+        return FilePin(
+            version_id=self.collection_version_id,
+            game_scoped_file_id=self.collection_file_id,
+            version_string=self.collection_file_version,
+            file_name=self.name,
+        )
 
 
 @dataclass
@@ -133,7 +150,8 @@ async def parse_collection_url_to_queue(url: str) -> dict[str, Any]:
 
     queue: list[QueueItem] = []
     installed_count = 0
-    status_map = mod_ops.batch_mod_status_info([entry.mod_id for entry in info.mods])
+    mod_ids = [entry.mod_id for entry in info.mods]
+    status_map = await asyncio.to_thread(mod_ops.batch_mod_status_info, mod_ids)
     for entry in info.mods:
         status, installed = status_map.get(
             entry.mod_id, (ModStatus.NOT_INSTALLED.value, False)
@@ -150,6 +168,9 @@ async def parse_collection_url_to_queue(url: str) -> dict[str, Any]:
                 installed=installed,
                 status=QueueItemStatus.PENDING.value,
                 message="已安装，将跳过" if installed else "",
+                collection_file_id=entry.collection_file_id,
+                collection_version_id=entry.collection_version_id,
+                collection_file_version=entry.collection_file_version,
             )
         )
 
@@ -191,17 +212,31 @@ async def start_collection_install(
     if not mod_ids:
         raise CollectionParseError("安装队列为空，请至少选择一个模组")
 
+    pin_by_mod: dict[int, CollectionModEntry] = {}
+    try:
+        info = await fetch_collection(slug, domain)
+        pin_by_mod = {entry.mod_id: entry for entry in info.mods}
+        if not title:
+            title = info.title
+    except Exception:
+        info = None
+
     job_id = str(uuid.uuid4())
-    items = [
-        QueueItem(
-            mod_id=mod_id,
-            name="",
-            order=index + 1,
-            optional=False,
-            selected=True,
+    items: list[QueueItem] = []
+    for index, mod_id in enumerate(mod_ids):
+        entry = pin_by_mod.get(mod_id)
+        items.append(
+            QueueItem(
+                mod_id=mod_id,
+                name=entry.name if entry else "",
+                order=index + 1,
+                optional=entry.optional if entry else False,
+                selected=True,
+                collection_file_id=entry.collection_file_id if entry else 0,
+                collection_version_id=entry.collection_version_id if entry else "",
+                collection_file_version=entry.collection_file_version if entry else "",
+            )
         )
-        for index, mod_id in enumerate(mod_ids)
-    ]
     job = CollectionJob(
         job_id=job_id,
         slug=slug,
@@ -268,12 +303,14 @@ async def _run_job(
                     install_dependencies=True,
                     allow_local_fallback=True,
                     skip_installed=skip_installed,
+                    pin=item.file_pin(),
                 )
             else:
                 raw = await mod_ops.install_mod(
                     item.mod_id,
                     allow_local_fallback=True,
                     skip_installed=skip_installed,
+                    pin=item.file_pin(),
                 )
             data = json.loads(raw)
             item.name = data.get("name") or item.name

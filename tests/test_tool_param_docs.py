@@ -12,6 +12,8 @@ NO_PARAM_TOOLS = {
     "list_pending_mods",
     "list_incomplete_mods",
     "check_mod_updates",
+    "fetch_trending_mods",
+    "sync_tracked_mods",
 }
 
 

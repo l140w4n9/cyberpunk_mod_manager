@@ -9,13 +9,13 @@ from typing import Optional
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from ..config import config
 from ..installer import Installer, get_uninstall_plan
 from ..models import Mod
-from ..services import audit_ops, health_audit, mod_ops
+from ..services import audit_ops, discovery, health_audit, mod_ops
 from ..services.summary import display_summary, ensure_mod_summary
 from ..storage.db import get_session
 
@@ -57,6 +57,10 @@ class AuditRequest(BaseModel):
 
 class CleanupPendingRequest(BaseModel):
     mod_ids: list[int] | None = None
+
+
+class BatchStatusRequest(BaseModel):
+    mod_ids: list[int] = Field(..., min_length=1)
 
 
 class DependencyOut(BaseModel):
@@ -192,6 +196,74 @@ def cleanup_pending_mods(req: CleanupPendingRequest) -> dict:
     """批量从库存清理待安装模组（未安装状态）。"""
     _ensure_data_dir()
     return mod_ops.cleanup_pending_mods(req.mod_ids)
+
+
+@router.get("/discovery/trending")
+async def get_trending_mods() -> dict:
+    """Nexus 热门模组（公开 feed）。"""
+    _ensure_data_dir()
+    mods = await discovery.fetch_trending_mods()
+    return {"count": len(mods), "mods": mods}
+
+
+@router.post("/discovery/sync-tracked")
+async def sync_tracked_mods() -> dict:
+    """将 Nexus 账户追踪的模组同步到本地库存。"""
+    _ensure_data_dir()
+    return await discovery.sync_tracked_mods_to_inventory()
+
+
+@router.get("/discovery/updated-feed")
+async def get_updated_feed(
+    period: str = Query("1w", description="时间窗口：1d / 1w / 1m"),
+    compare_local: bool = Query(False, description="是否与本地库存比对"),
+) -> dict:
+    """Nexus 近期有活动的模组 feed。"""
+    _ensure_data_dir()
+    feed = await discovery.fetch_updated_feed(period=period)
+    payload: dict = {"count": len(feed), "period": period, "feed": feed}
+    if compare_local:
+        payload["local_hits"] = discovery.compare_local_with_updated_feed(feed)
+    return payload
+
+
+@router.post("/discovery/batch-status")
+async def batch_mod_status(req: BatchStatusRequest) -> dict:
+    """批量查询模组在 Nexus 上的可用性与状态。"""
+    _ensure_data_dir()
+    rows = await discovery.batch_mod_availability(req.mod_ids)
+    return {"count": len(rows), "mods": rows}
+
+
+@router.get("/{mod_id}/dependency-ranges")
+async def mod_dependency_ranges(
+    mod_id: int,
+    version_id: str | None = Query(None, description="v3 文件版本 ID，省略则用已安装或最新"),
+) -> dict:
+    """查询模组文件版本的依赖范围定义（v3）。"""
+    _ensure_data_dir()
+    from ..nexus.client import NexusClient
+
+    async with NexusClient() as client:
+        target = version_id
+        if not target:
+            with get_session() as session:
+                mod = session.exec(
+                    select(Mod).where(Mod.nexus_mod_id == mod_id)
+                ).first()
+            if mod and mod.nexus_version_id:
+                target = mod.nexus_version_id
+            else:
+                picked = await client.resolve_target_version(mod_id)
+                target = picked.version_id if picked else ""
+        if not target:
+            raise HTTPException(404, f"未找到模组 {mod_id} 的可用文件版本")
+        data = await client.get_dependency_ranges(target)
+    return {
+        "mod_id": mod_id,
+        "version_id": target,
+        "ranges": data.get("data") or data,
+    }
 
 
 @router.get("/{mod_id}/dependencies")

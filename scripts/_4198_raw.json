@@ -1,0 +1,36 @@
+{
+  "name": "ArchiveXL",
+  "summary": "Archive extension loader",
+  "description": "[b][color=#f3e500][size=5]ARCHIVE-XL[/size][/color][/b]\n<br />\n<br />ArchiveXL is a modding tool that allows you to load custom resources without touching original game files, thus allowing multiple mods to expand same resources without conflicts.\n<br />\n<br />— Load custom entity factories (necessary for item additions)\n<br />— Add localization texts that can be used in scripts, resources and TweakDB\n<br />— Edit existing localization texts without overwriting original resources\n<br />— Override submeshes of entity parts\n<br />— Add visual tags to clothing items\n<br />— Create character customization options\n<br />— Create custom attachment slots\n<br />— Register world streaming blocks\n<br />— Manage journal entries\n<br />— Spawn widgets from any library\n<br />\n<br />[color=#01fdfe][size=4]COMPATIBILITY[/size][/color]\n<br />\n<br />✓ Cyberpunk 2077 2.31\n<br />✓ redscript 0.5.31+\n<br />\n<br />[color=#01fdfe][size=4]INSTALLATION[/size][/color]\n<br />\n<br />1. Install requirements\n<br />— [url=https://www.nexusmods.com/cyberpunk2077/mods/2380][color=#e3dee0]RED4ext[/color][/url] 1.29.0+\n<br />2. Download the latest release\n<br />3. Extract the archive into the Cyberpunk 2077 directory\n<br />\n<br />[size=2][color=#aaaaaa][i]You should have a \"&lt;Cyberpunk 2077&gt;/red4ext/plugins/ArchiveXL\" directory if done correctly.[/i][/color][/size]\n<br />\n<br />[color=#01fdfe][size=4]DOCUMENTATION[/size][/color]\n<br />\n<br />▸ [url=https://github.com/psiberx/cp2077-archive-xl/wiki#dynamic-appearances][color=#e3dee0]Dynamic appearances[/color][/url]\n<br />▸ [url=https://github.com/psiberx/cp2077-archive-xl/wiki#body-types][color=#e3dee0]Body types[/color][/url]\n<br />▸ [url=https://github.com/psiberx/cp2077-archive-xl/wiki#appearance-suffixes][color=#e3dee0]Appearance suffixes[/color][/url]\n<br />▸ [url=https://github.com/psiberx/cp2077-archive-xl/wiki#components-overrides][color=#e3dee0]Components overrides[/color][/url]\n<br />▸ [url=https://github.com/psiberx/cp2077-archive-xl/wiki#visual-tags][color=#e3dee0]Visual tags[/color][/url]\n<br />▸ [url=https://github.com/psiberx/cp2077-archive-xl/wiki#extending-resources][color=#e3dee0]Extending resources[/color][/url]\n<br />\n<br />[color=#01fdfe][size=4]COMMUNITY[/size][/color]\n<br />\n<br />If you need help with mod development or have any other question, please feel free to contact me on Discord.\n<br />I prefer public discussions so that everyone can use shared knowledge.\n<br />\n<br />▸ [url=https://discord.gg/redmodding][color=#e3dee0]Cyberpunk 2077 Modding Community[/color][/url]\n<br />▸ [url=https://discord.gg/z3dBY7PQNK][color=#e3dee0]Cyberpunk 2077 Modding[/color][/url]",
+  "picture_url": "https://staticdelivery.nexusmods.com/mods/3333/images/4198/4198-1648116857-72076015.jpeg",
+  "mod_downloads": 11505677,
+  "mod_unique_downloads": 3331743,
+  "uid": 14315126001766,
+  "mod_id": 4198,
+  "game_id": 3333,
+  "allow_rating": true,
+  "domain_name": "cyberpunk2077",
+  "category_id": 12,
+  "version": "1.26.8",
+  "endorsement_count": 130315,
+  "created_timestamp": 1648124529,
+  "created_time": "2022-03-24T12:22:09.000+00:00",
+  "updated_timestamp": 1779256460,
+  "updated_time": "2026-05-20T05:54:20.000+00:00",
+  "author": "psiberx",
+  "uploaded_by": "psiberx",
+  "uploaded_users_profile_url": "https://www.nexusmods.com/users/108159138",
+  "contains_adult_content": false,
+  "status": "published",
+  "available": true,
+  "user": {
+    "member_id": 108159138,
+    "member_group_id": 27,
+    "name": "psiberx"
+  },
+  "endorsement": {
+    "endorse_status": "Undecided",
+    "timestamp": null,
+    "version": null
+  }
+}

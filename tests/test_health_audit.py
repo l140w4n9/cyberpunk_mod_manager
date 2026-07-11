@@ -70,19 +70,23 @@ async def test_check_mod_updates_detects_new_file(
     mod.name = "Test Mod"
     mod.version = "1.0"
     mod.nexus_file_id = 10
+    mod.nexus_version_id = ""
     mock_load.return_value = [mod]
     mock_status.return_value = ModStatus.INSTALLED.value
 
     details = MagicMock()
     details.version = "1.1"
+    details.name = "Test Mod"
+    details.legacy_mod_requirements = True
     latest = MagicMock()
     latest.file_id = 20
     latest.version = "1.1"
+    latest.version_id = "ver-new"
     latest.file_name = "main.zip"
 
     client = AsyncMock()
     client.get_mod_details = AsyncMock(return_value=details)
-    client.get_mod_files = AsyncMock(return_value=[latest])
+    client.resolve_target_version = AsyncMock(return_value=latest)
     mock_client_cls.return_value.__aenter__.return_value = client
 
     data = json.loads(await health_audit.check_mod_updates())

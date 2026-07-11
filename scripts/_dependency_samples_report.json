@@ -1,0 +1,308 @@
+[
+  {
+    "mod_id": 18777,
+    "label": "Rebeccas Apartment DLC",
+    "notes": "Nexus requirements 表格；描述里仅有 7871 前作链接",
+    "nexus_requirements": [
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "nexus"
+      },
+      {
+        "id": 4198,
+        "name": "ArchiveXL",
+        "source": "nexus"
+      },
+      {
+        "id": 21422,
+        "name": "Native Interactions Framework",
+        "source": "nexus"
+      }
+    ],
+    "text_parsed_loose": [],
+    "text_parsed_strict": [],
+    "raw_links_in_description": [
+      7871
+    ],
+    "collect_dependencies": [
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "nexus"
+      },
+      {
+        "id": 4198,
+        "name": "ArchiveXL",
+        "source": "nexus"
+      },
+      {
+        "id": 21422,
+        "name": "Native Interactions Framework",
+        "source": "nexus"
+      }
+    ],
+    "checks": {
+      "expect_all_present": true,
+      "missing_expected": [],
+      "unexpected_extra": [],
+      "forbidden_absent": true,
+      "forbidden_found": [],
+      "nexus_subset_of_final": true,
+      "no_extra_parsed_when_nexus_present": true,
+      "extra_parsed_ids": []
+    },
+    "passed": true
+  },
+  {
+    "mod_id": 27967,
+    "label": "0-Engine",
+    "notes": "KNOWN_MOD_DEPENDENCIES 硬编码补充",
+    "nexus_requirements": [
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "nexus"
+      },
+      {
+        "id": 1511,
+        "name": "redscript",
+        "source": "nexus"
+      },
+      {
+        "id": 7780,
+        "name": "Codeware",
+        "source": "nexus"
+      }
+    ],
+    "text_parsed_loose": [
+      107,
+      7780,
+      1511
+    ],
+    "text_parsed_strict": [
+      107,
+      7780
+    ],
+    "raw_links_in_description": [
+      107,
+      1511,
+      7780
+    ],
+    "collect_dependencies": [
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "known"
+      },
+      {
+        "id": 1511,
+        "name": "redscript",
+        "source": "known"
+      },
+      {
+        "id": 7780,
+        "name": "Codeware",
+        "source": "known"
+      }
+    ],
+    "checks": {
+      "expect_all_present": true,
+      "missing_expected": [],
+      "unexpected_extra": [],
+      "forbidden_absent": true,
+      "forbidden_found": [],
+      "nexus_subset_of_final": true,
+      "no_extra_parsed_when_nexus_present": true,
+      "extra_parsed_ids": []
+    },
+    "passed": true
+  },
+  {
+    "mod_id": 23032,
+    "label": "2nd Amendment Sign",
+    "notes": "可选依赖 24453 应标 optional（若描述含链接）",
+    "nexus_requirements": [
+      {
+        "id": 4198,
+        "name": "ArchiveXL",
+        "source": "nexus"
+      }
+    ],
+    "text_parsed_loose": [
+      24453
+    ],
+    "text_parsed_strict": [],
+    "raw_links_in_description": [
+      24453
+    ],
+    "collect_dependencies": [
+      {
+        "id": 4198,
+        "name": "ArchiveXL",
+        "source": "nexus"
+      }
+    ],
+    "checks": {
+      "forbidden_absent": true,
+      "forbidden_found": [],
+      "nexus_subset_of_final": true,
+      "no_extra_parsed_when_nexus_present": true,
+      "extra_parsed_ids": []
+    },
+    "passed": true
+  },
+  {
+    "mod_id": 9617,
+    "label": "V's Apartment AMM",
+    "notes": "描述含 Requires + 安装步骤链接，应解析出真实前置",
+    "nexus_requirements": [
+      {
+        "id": 52,
+        "name": "Edgerunner ReShade",
+        "source": "optional"
+      },
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "nexus"
+      },
+      {
+        "id": 790,
+        "name": "Appearance Menu Mod",
+        "source": "nexus"
+      },
+      {
+        "id": 2154,
+        "name": "V's Apartment Renovation",
+        "source": "optional"
+      }
+    ],
+    "text_parsed_loose": [
+      107,
+      790,
+      2154
+    ],
+    "text_parsed_strict": [],
+    "raw_links_in_description": [
+      107,
+      790,
+      2154
+    ],
+    "collect_dependencies": [
+      {
+        "id": 52,
+        "name": "Edgerunner ReShade",
+        "source": "optional"
+      },
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "nexus"
+      },
+      {
+        "id": 790,
+        "name": "Appearance Menu Mod",
+        "source": "nexus"
+      },
+      {
+        "id": 2154,
+        "name": "V's Apartment Renovation",
+        "source": "optional"
+      }
+    ],
+    "checks": {
+      "forbidden_absent": true,
+      "forbidden_found": [],
+      "nexus_subset_of_final": true,
+      "no_extra_parsed_when_nexus_present": true,
+      "extra_parsed_ids": []
+    },
+    "passed": true
+  },
+  {
+    "mod_id": 21422,
+    "label": "Native Interactions Framework",
+    "notes": "框架模组，通常无 Nexus requirements",
+    "nexus_requirements": [
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "nexus"
+      },
+      {
+        "id": 1511,
+        "name": "redscript",
+        "source": "nexus"
+      },
+      {
+        "id": 2380,
+        "name": "RED4ext",
+        "source": "nexus"
+      },
+      {
+        "id": 4198,
+        "name": "ArchiveXL",
+        "source": "nexus"
+      },
+      {
+        "id": 7780,
+        "name": "Codeware",
+        "source": "nexus"
+      }
+    ],
+    "text_parsed_loose": [],
+    "text_parsed_strict": [],
+    "raw_links_in_description": [],
+    "collect_dependencies": [
+      {
+        "id": 107,
+        "name": "Cyber Engine Tweaks",
+        "source": "nexus"
+      },
+      {
+        "id": 1511,
+        "name": "redscript",
+        "source": "nexus"
+      },
+      {
+        "id": 2380,
+        "name": "RED4ext",
+        "source": "nexus"
+      },
+      {
+        "id": 4198,
+        "name": "ArchiveXL",
+        "source": "nexus"
+      },
+      {
+        "id": 7780,
+        "name": "Codeware",
+        "source": "nexus"
+      }
+    ],
+    "checks": {
+      "forbidden_absent": true,
+      "forbidden_found": [],
+      "nexus_subset_of_final": true,
+      "no_extra_parsed_when_nexus_present": true,
+      "extra_parsed_ids": []
+    },
+    "passed": true
+  },
+  {
+    "mod_id": 107,
+    "label": "Cyber Engine Tweaks",
+    "notes": "基础框架，对照组",
+    "nexus_requirements": [],
+    "text_parsed_loose": [],
+    "text_parsed_strict": [],
+    "raw_links_in_description": [],
+    "collect_dependencies": [],
+    "checks": {
+      "forbidden_absent": true,
+      "forbidden_found": []
+    },
+    "passed": true
+  }
+]

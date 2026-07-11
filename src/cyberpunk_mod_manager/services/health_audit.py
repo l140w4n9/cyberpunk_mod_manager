@@ -12,7 +12,7 @@ from sqlmodel import select
 from ..config import config
 from ..installer import get_uninstall_plan
 from ..models import Mod, ModStatus
-from ..nexus.client import NexusAPIError, NexusClient, select_download_file
+from ..nexus.client import NexusAPIError, NexusClient
 from ..services import mod_ops
 from ..services.concurrency import DEFAULT_CONCURRENCY, gather_bounded
 from ..services.summary import _parse_chat_response, parse_llm_json_from_response
@@ -83,43 +83,61 @@ def list_incomplete_mods() -> str:
 async def _check_single_mod_update(mod: Mod, client: NexusClient) -> dict[str, Any]:
     installed_version = (mod.version or "").strip()
     installed_file_id = mod.nexus_file_id
+    installed_version_id = (mod.nexus_version_id or "").strip()
     try:
         details = await client.get_mod_details(mod.nexus_mod_id)
-        files = await client.get_mod_files(mod.nexus_mod_id)
-        latest = select_download_file(files)
+        latest = await client.resolve_target_version(mod.nexus_mod_id)
     except NexusAPIError as exc:
         return {
             "mod_id": mod.nexus_mod_id,
             "name": mod.name,
             "error": str(exc),
-            "update_available": False,
+            "has_update": False,
         }
 
-    latest_version = (details.version or latest.version if latest else "") or ""
-    latest_file_id = latest.file_id if latest else None
-    update_available = False
+    if latest is None:
+        return {
+            "mod_id": mod.nexus_mod_id,
+            "name": mod.name,
+            "has_update": False,
+            "reasons": ["未找到可用文件版本"],
+        }
+
+    latest_version = (latest.version or details.version or "").strip()
+    latest_file_id = latest.file_id
+    latest_version_id = latest.version_id
+    has_update = False
     reasons: list[str] = []
 
-    if latest_file_id and installed_file_id and latest_file_id != installed_file_id:
-        update_available = True
+    if latest_version_id and installed_version_id:
+        if latest_version_id != installed_version_id:
+            has_update = True
+            reasons.append(
+                f"版本 ID {installed_version_id} -> {latest_version_id}"
+            )
+    elif latest_file_id and installed_file_id and latest_file_id != installed_file_id:
+        has_update = True
         reasons.append(f"文件 ID {installed_file_id} -> {latest_file_id}")
     if latest_version and installed_version and latest_version != installed_version:
-        update_available = True
+        has_update = True
         reasons.append(f"版本 {installed_version} -> {latest_version}")
     elif latest_version and not installed_version:
-        update_available = True
+        has_update = True
         reasons.append(f"未记录本地版本，Nexus 最新 {latest_version}")
 
     return {
         "mod_id": mod.nexus_mod_id,
-        "name": mod.name,
+        "name": mod.name or details.name,
+        "has_update": has_update,
+        "update_available": has_update,
+        "reasons": reasons,
         "installed_version": installed_version,
         "latest_version": latest_version,
         "installed_file_id": installed_file_id,
         "latest_file_id": latest_file_id,
-        "latest_file_name": latest.file_name if latest else "",
-        "update_available": update_available,
-        "reasons": reasons,
+        "installed_version_id": installed_version_id,
+        "latest_version_id": latest_version_id,
+        "legacy_mod_requirements": details.legacy_mod_requirements,
     }
 
 

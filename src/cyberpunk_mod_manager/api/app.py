@@ -50,12 +50,17 @@ app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 async def health() -> dict:
     """健康检查端点。"""
     nexus_valid = False
+    nexus_user: dict = {}
     if config.nexus_api_key:
         from ..nexus.client import NexusClient
 
         try:
             async with NexusClient() as client:
                 nexus_valid = await client.validate_key()
+                if nexus_valid:
+                    profile = await client.get_user_profile()
+                    if profile is not None:
+                        nexus_user = profile.model_dump()
         except Exception:
             nexus_valid = False
     return {
@@ -66,6 +71,8 @@ async def health() -> dict:
         "config_file": config.config_file,
         "nexus_configured": bool(config.nexus_api_key),
         "nexus_valid": nexus_valid,
+        "nexus_user": nexus_user,
+        "nexus_premium": bool(nexus_user.get("is_premium")),
         "llm_configured": bool(config.openai_api_key),
     }
 

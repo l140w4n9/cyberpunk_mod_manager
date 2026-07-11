@@ -19,7 +19,12 @@ const queue = ref([])
 const stats = ref(null)
 const jobId = ref('')
 const job = ref(null)
-const polling = ref(false)
+const revisionChanged = ref(false)
+const revisionChecking = ref(false)
+const parseStage = ref('')
+const queuePageSize = 50
+const queueVisibleCount = ref(queuePageSize)
+let persistTimer = null
 let pollTimer = null
 
 const selectedCount = computed(() =>
@@ -38,6 +43,8 @@ const allSelected = computed({
 })
 const isRunning = computed(() => job.value?.state === 'running')
 const progress = computed(() => job.value?.progress || null)
+const displayedQueue = computed(() => queue.value.slice(0, queueVisibleCount.value))
+const hasMoreQueue = computed(() => queueVisibleCount.value < queue.value.length)
 
 function statusLabel(item) {
   if (item.installed && item.status === 'pending') return '已安装·将跳过'
@@ -61,6 +68,7 @@ async function parseCollection() {
   const url = collectionUrl.value.trim()
   if (!url) return
   parsing.value = true
+  parseStage.value = '正在请求 Nexus 收藏夹数据…'
   parseError.value = ''
   stopPolling()
   emit('install-finished')
@@ -68,9 +76,13 @@ async function parseCollection() {
   job.value = null
   try {
     const data = await api.parseCollection(url)
+    parseStage.value = '正在生成安装队列…'
     collection.value = data.collection
     queue.value = (data.queue || []).map((item) => ({ ...item }))
     stats.value = data.stats
+    queueVisibleCount.value = Math.min(queuePageSize, queue.value.length || queuePageSize)
+    revisionChanged.value = false
+    applyRevisionFromParse()
     persistState()
   } catch (e) {
     parseError.value = e.message
@@ -80,7 +92,33 @@ async function parseCollection() {
     persistState()
   } finally {
     parsing.value = false
+    parseStage.value = ''
   }
+}
+
+function applyRevisionFromParse() {
+  if (!collection.value?.slug) return
+  const key = `${STORAGE_KEY}_revision_${collection.value.slug}`
+  const stored = sessionStorage.getItem(key)
+  const known = stored ? Number(stored) : null
+  const current = Number(collection.value.revision_number || 0)
+  revisionChanged.value = known !== null && !Number.isNaN(known) && known !== current
+  sessionStorage.setItem(key, String(current))
+}
+
+function showMoreQueue() {
+  queueVisibleCount.value = Math.min(
+    queueVisibleCount.value + queuePageSize,
+    queue.value.length,
+  )
+}
+
+function schedulePersistState() {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    persistState()
+  }, 250)
 }
 
 function persistState() {
@@ -108,7 +146,10 @@ async function restoreState() {
     const data = JSON.parse(raw)
     if (data.collectionUrl) collectionUrl.value = data.collectionUrl
     if (data.collection) collection.value = data.collection
-    if (Array.isArray(data.queue) && data.queue.length) queue.value = data.queue
+    if (Array.isArray(data.queue) && data.queue.length) {
+      queue.value = data.queue
+      queueVisibleCount.value = Math.min(queuePageSize, data.queue.length)
+    }
     if (data.stats) stats.value = data.stats
     if (data.jobId) {
       jobId.value = data.jobId
@@ -149,6 +190,29 @@ function resetQueueForInstall(modIds) {
     }
     return { ...item, status: 'pending', message: '' }
   })
+}
+
+async function checkRevisionChange() {
+  if (!collection.value?.slug) return
+  revisionChecking.value = true
+  try {
+    const stored = sessionStorage.getItem(`${STORAGE_KEY}_revision_${collection.value.slug}`)
+    const known = stored ? Number(stored) : null
+    const data = await api.checkCollectionRevision(
+      collection.value.slug,
+      Number.isNaN(known) ? null : known,
+      collection.value.domain,
+    )
+    revisionChanged.value = Boolean(data.changed)
+    sessionStorage.setItem(
+      `${STORAGE_KEY}_revision_${collection.value.slug}`,
+      String(data.revision_number),
+    )
+  } catch {
+    applyRevisionFromParse()
+  } finally {
+    revisionChecking.value = false
+  }
 }
 
 async function startInstall() {
@@ -240,9 +304,13 @@ onMounted(() => {
   restoreState()
 })
 
-watch([collectionUrl, collection, queue, stats, jobId, job], persistState, { deep: true })
+watch([collectionUrl, collection, stats, jobId, job], schedulePersistState, { deep: true })
+watch(queue, schedulePersistState, { deep: true })
 
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  if (persistTimer) clearTimeout(persistTimer)
+})
 </script>
 
 <template>
@@ -276,6 +344,7 @@ onUnmounted(stopPolling)
       <p v-if="!health.data_dir_configured" class="hint warn">请先在「设置」页配置数据目录</p>
       <p v-if="!health.nexus_valid && health.nexus_configured" class="hint warn">Nexus API Key 无效，无法解析收藏夹</p>
       <p v-if="parseError" class="hint err">{{ parseError }}</p>
+      <p v-else-if="parsing && parseStage" class="hint">{{ parseStage }}</p>
     </section>
 
     <section v-if="collection" class="summary panel">
@@ -285,6 +354,9 @@ onUnmounted(stopPolling)
           <p class="mono meta">
             {{ collection.slug }} · 修订 #{{ collection.revision_number }} ·
             {{ collection.unique_mod_count }} 个模组（去重后）
+          </p>
+          <p v-if="revisionChanged" class="hint warn">
+            收藏夹修订已更新，建议重新解析队列后再安装。
           </p>
         </div>
         <a class="link" :href="collection.url" target="_blank" rel="noopener">在 Nexus 打开</a>
@@ -327,7 +399,7 @@ onUnmounted(stopPolling)
     <section v-if="queue.length" class="queue-section">
       <div class="queue-list">
         <div
-          v-for="item in queue"
+          v-for="item in displayedQueue"
           :key="item.mod_id"
           class="queue-item panel"
           :class="statusClass(item)"
@@ -350,6 +422,11 @@ onUnmounted(stopPolling)
           </div>
           <span class="status-pill" :class="statusClass(item)">{{ statusLabel(item) }}</span>
         </div>
+      </div>
+      <div v-if="hasMoreQueue" class="btn-row queue-more">
+        <button class="btn-secondary" @click="showMoreQueue">
+          显示更多（{{ displayedQueue.length }}/{{ queue.length }}）
+        </button>
       </div>
     </section>
   </div>

@@ -18,6 +18,10 @@ const emit = defineEmits(['refresh-mods', 'status', 'agent-handoff'])
 
 const auditing = ref(false)
 const checkingUpdates = ref(false)
+const syncingTracked = ref(false)
+const trending = ref([])
+const updatedHits = ref([])
+const discoveryError = ref('')
 const autoFix = ref(false)
 const report = ref(null)
 const updatesResult = ref(null)
@@ -73,6 +77,44 @@ function handoffToAgent() {
 function setError(message) {
   error.value = message
   emit('status', message, 'err')
+}
+
+async function loadTrending() {
+  discoveryError.value = ''
+  try {
+    const data = await api.getTrendingMods()
+    trending.value = data.mods || []
+  } catch (e) {
+    discoveryError.value = '热门模组加载失败: ' + e.message
+  }
+}
+
+async function syncTracked() {
+  if (!props.health.nexus_valid) {
+    setError('Nexus API Key 无效，无法同步追踪模组')
+    return
+  }
+  syncingTracked.value = true
+  discoveryError.value = ''
+  try {
+    const data = await api.syncTrackedMods()
+    emit('status', `已同步 ${data.synced || 0} 个追踪模组`, 'info')
+    emit('refresh-mods')
+  } catch (e) {
+    discoveryError.value = '同步追踪模组失败: ' + e.message
+  } finally {
+    syncingTracked.value = false
+  }
+}
+
+async function loadUpdatedHits() {
+  discoveryError.value = ''
+  try {
+    const data = await api.getUpdatedFeed('1w', true)
+    updatedHits.value = data.local_hits || []
+  } catch (e) {
+    discoveryError.value = '更新 feed 加载失败: ' + e.message
+  }
 }
 
 function applyAuditResult(result) {
@@ -267,6 +309,10 @@ watch(autoFix, persistState)
 
 onMounted(() => {
   restoreState()
+  if (props.health.data_dir_configured) {
+    loadTrending()
+    loadUpdatedHits()
+  }
 })
 
 onUnmounted(() => {
@@ -330,6 +376,40 @@ onUnmounted(() => {
       <p v-else-if="!isRunning && report && !health.llm_configured" class="hint warn">
         未配置 LLM，无法使用 Agent 自动处理。请先在设置中配置 API Key。
       </p>
+    </section>
+
+    <section class="discovery panel-inner">
+      <h3>Nexus 发现</h3>
+      <p class="muted">热门模组、追踪同步与近期活动 feed（v3 API）</p>
+      <div class="btn-row">
+        <button class="btn-secondary" :disabled="!health.data_dir_configured" @click="loadTrending">
+          刷新热门
+        </button>
+        <button
+          class="btn-secondary"
+          :disabled="syncingTracked || !health.nexus_valid"
+          @click="syncTracked"
+        >
+          {{ syncingTracked ? '同步中…' : '同步追踪模组' }}
+        </button>
+        <button class="btn-secondary" :disabled="!health.data_dir_configured" @click="loadUpdatedHits">
+          刷新活动 feed
+        </button>
+      </div>
+      <p v-if="discoveryError" class="error-text">{{ discoveryError }}</p>
+      <div v-if="trending.length" class="trending-list">
+        <div v-for="item in trending.slice(0, 5)" :key="item.mod_id || item.mod_page_url" class="trending-row">
+          <a :href="item.mod_page_url" target="_blank" rel="noopener">{{ item.name }}</a>
+          <span class="muted">#{{ item.mod_id }}</span>
+        </div>
+      </div>
+      <div v-if="updatedHits.length" class="updated-hits">
+        <h4>本地库存近期有活动（{{ updatedHits.length }}）</h4>
+        <div v-for="hit in updatedHits.slice(0, 8)" :key="hit.mod_id" class="trending-row">
+          <span>#{{ hit.mod_id }} {{ hit.name }}</span>
+          <span class="muted">{{ hit.local_status }}</span>
+        </div>
+      </div>
     </section>
 
     <section v-if="issueSummary" class="summary panel-inner" :class="{ ok: healthy }">
@@ -479,6 +559,24 @@ onUnmounted(() => {
 .progress-count {
   margin: 4px 0 0;
   font-size: 11px;
+  color: var(--muted);
+}
+.trending-list,
+.updated-hits {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trending-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.discovery h4 {
+  margin: 12px 0 6px;
+  font-size: 12px;
   color: var(--muted);
 }
 .handoff-row {

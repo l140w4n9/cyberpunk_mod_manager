@@ -98,7 +98,16 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
     <div class="sidebar-footer">
       <div class="health" :class="{ ok: health.ready }">
         <span class="health-dot" />
-        <span class="health-text">{{ health.label }}</span>
+        <div class="health-meta">
+          <span class="health-text">{{ health.label }}</span>
+          <span
+            v-if="health.nexus_valid && health.nexus_user?.name"
+            class="health-sub"
+          >
+            {{ health.nexus_user.name }}
+            <template v-if="health.nexus_premium"> · Premium</template>
+          </span>
+        </div>
       </div>
     </div>
   </aside>
@@ -220,9 +229,20 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
   color: var(--danger);
 }
 .health.ok { color: var(--ok); }
+.health-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 .health-text {
   line-height: 1.4;
   word-break: break-word;
+}
+.health-sub {
+  font-size: 10px;
+  opacity: 0.75;
+  line-height: 1.3;
 }
 .health-dot {
   width: 6px;
