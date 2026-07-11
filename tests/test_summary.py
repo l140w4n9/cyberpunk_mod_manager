@@ -11,6 +11,8 @@ from cyberpunk_mod_manager.services.summary import (
     _parse_chat_response,
     _parse_sse_response,
     fallback_summary,
+    parse_llm_json_from_response,
+    parse_llm_json_object,
 )
 
 
@@ -55,3 +57,34 @@ def test_extract_from_reasoning_content() -> None:
     }
     text = _extract_message_content(data)
     assert "推理" in text
+
+
+def test_parse_llm_json_object_from_markdown_fence() -> None:
+    text = (
+        "分析如下：\n"
+        '```json\n'
+        '{"summary":"需要补依赖","risks":["冲突"],"recommendations":[]}\n'
+        "```"
+    )
+    parsed = parse_llm_json_object(text)
+    assert parsed["summary"] == "需要补依赖"
+    assert parsed["risks"] == ["冲突"]
+
+
+def test_parse_llm_json_from_reasoning_response() -> None:
+    data = {
+        "choices": [
+            {
+                "message": {
+                    "content": "",
+                    "reasoning_content": (
+                        '{"summary":"优先补全33个依赖不全模组",'
+                        '"risks":[],"recommendations":[{"action":"install_deps","mod_id":1,"reason":"缺依赖"}]}'
+                    ),
+                }
+            }
+        ]
+    }
+    parsed = parse_llm_json_from_response(data)
+    assert "依赖不全" in parsed["summary"]
+    assert parsed["recommendations"][0]["mod_id"] == 1

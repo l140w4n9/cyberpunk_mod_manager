@@ -6,6 +6,7 @@ import AgentWorkspace from './views/AgentWorkspace.vue'
 import ModsWorkspace from './views/ModsWorkspace.vue'
 import SettingsWorkspace from './views/SettingsWorkspace.vue'
 import CollectionWorkspace from './views/CollectionWorkspace.vue'
+import MaintenanceWorkspace from './views/MaintenanceWorkspace.vue'
 import UninstallDialog from './components/UninstallDialog.vue'
 import { installHashListener, readSavedView, writeView } from './utils/navigation'
 
@@ -13,6 +14,7 @@ const activeView = ref(readSavedView())
 const mods = ref([])
 const loading = ref(false)
 const installing = ref(false)
+const cleaning = ref(false)
 const health = ref({ ready: false, label: '检查中...' })
 const status = ref({ message: '', type: '' })
 const uninstallDialog = ref({ visible: false, report: null, modId: null })
@@ -82,6 +84,38 @@ const MODS_FILTER = {
   mods: 'installed',
   'mods-pending': 'pending',
   'mods-incomplete': 'incomplete',
+}
+
+async function handleCleanupMod(modId) {
+  cleaning.value = true
+  setStatus(`正在清理模组 ${modId}...`, 'info')
+  try {
+    const data = await api.deleteMod(modId)
+    setStatus(`✓ 已清理 ${data.name || modId}`, 'ok')
+    await loadMods()
+  } catch (e) {
+    setStatus('✕ ' + e.message, 'err')
+  } finally {
+    cleaning.value = false
+  }
+}
+
+async function handleCleanupAllPending(modIds) {
+  cleaning.value = true
+  setStatus(`正在清理 ${modIds.length} 个待安装模组...`, 'info')
+  try {
+    const data = await api.cleanupPendingMods(modIds)
+    const failed = data.failed_count || 0
+    setStatus(
+      `✓ 已清理 ${data.deleted_count || 0} 个` + (failed ? `，${failed} 个失败` : ''),
+      failed ? 'err' : 'ok',
+    )
+    await loadMods()
+  } catch (e) {
+    setStatus('✕ ' + e.message, 'err')
+  } finally {
+    cleaning.value = false
+  }
 }
 
 async function handleInstall(modId) {
@@ -256,6 +290,7 @@ onUnmounted(() => {
         :mods="mods"
         :loading="loading"
         :installing="installing"
+        :cleaning="cleaning"
         :status="status"
         :filter-mode="MODS_FILTER[activeView]"
         @install="handleInstall"
@@ -265,6 +300,8 @@ onUnmounted(() => {
         @install-local-folder="handleInstallLocalFolder"
         @check-deps="handleCheckDeps"
         @uninstall="handleUninstall"
+        @cleanup-mod="handleCleanupMod"
+        @cleanup-all-pending="handleCleanupAllPending"
       />
       <CollectionWorkspace
         v-else-if="activeView === 'collections'"
@@ -273,6 +310,14 @@ onUnmounted(() => {
         @install-started="installing = true"
         @install-finished="installing = false"
         @refresh-mods="loadMods"
+      />
+      <MaintenanceWorkspace
+        v-else-if="activeView === 'maintenance'"
+        :health="health"
+        :installing="installing"
+        @refresh-mods="loadMods"
+        @status="setStatus"
+        @agent-handoff="navigate('agent')"
       />
       <div v-else class="empty-fallback panel">
         <p>页面不存在，请从侧栏重新选择。</p>

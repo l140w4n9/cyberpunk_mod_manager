@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from sqlmodel import select
 
 from ..models import Mod, ModDependency
+from ..services.concurrency import DEFAULT_CONCURRENCY, gather_bounded
 from ..storage.db import get_session
 from .client import NexusClient
 
@@ -148,13 +149,18 @@ async def enrich_dependency_names_from_nexus() -> int:
     names: dict[int, str] = {}
     try:
         async with NexusClient() as client:
-            for dep_id in missing_ids:
+            async def fetch_name(dep_id: int) -> tuple[int, str]:
                 try:
                     details = await client.get_mod_details(dep_id)
-                    if details.name:
-                        names[dep_id] = details.name
+                    return dep_id, (details.name or "").strip()
                 except Exception:
-                    continue
+                    return dep_id, ""
+
+            pairs = await gather_bounded(
+                [fetch_name(dep_id) for dep_id in missing_ids],
+                concurrency=DEFAULT_CONCURRENCY,
+            )
+            names = {dep_id: name for dep_id, name in pairs if name}
     except Exception:
         return 0
 
@@ -220,9 +226,17 @@ async def collect_dependencies(mod_id: int, description: str = "", summary: str 
     if missing_names:
         try:
             async with NexusClient() as client:
-                for item in missing_names:
-                    details = await client.get_mod_details(int(item["mod_id"]))
-                    item["name"] = details.name
+                async def fetch_name(item: dict) -> None:
+                    try:
+                        details = await client.get_mod_details(int(item["mod_id"]))
+                        item["name"] = details.name
+                    except Exception:
+                        return
+
+                await gather_bounded(
+                    [fetch_name(item) for item in missing_names],
+                    concurrency=DEFAULT_CONCURRENCY,
+                )
         except Exception:
             pass
 

@@ -71,6 +71,14 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         <span class="nav-icon">♥</span>
         收藏安装
       </button>
+      <button
+        class="nav-item"
+        :class="{ active: active === 'maintenance' }"
+        @click="$emit('navigate', 'maintenance')"
+      >
+        <span class="nav-icon">✦</span>
+        健康审查
+      </button>
 
       <div class="nav-group-label">系统</div>
       <button

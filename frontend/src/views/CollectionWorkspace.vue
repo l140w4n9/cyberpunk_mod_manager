@@ -62,6 +62,8 @@ async function parseCollection() {
   if (!url) return
   parsing.value = true
   parseError.value = ''
+  stopPolling()
+  emit('install-finished')
   jobId.value = ''
   job.value = null
   try {
@@ -138,6 +140,17 @@ function selectedModIds() {
     .map((item) => item.mod_id)
 }
 
+function resetQueueForInstall(modIds) {
+  const idSet = new Set(modIds)
+  queue.value = queue.value.map((item) => {
+    if (!idSet.has(item.mod_id)) return item
+    if (item.installed) {
+      return { ...item, status: 'pending', message: '已安装，将跳过' }
+    }
+    return { ...item, status: 'pending', message: '' }
+  })
+}
+
 async function startInstall() {
   if (!collection.value) return
   const modIds = selectedModIds()
@@ -146,6 +159,12 @@ async function startInstall() {
     return
   }
   parseError.value = ''
+  stopPolling()
+  emit('install-finished')
+  resetQueueForInstall(modIds)
+  jobId.value = ''
+  job.value = null
+  persistState()
   emit('install-started')
   try {
     const data = await api.installCollection({

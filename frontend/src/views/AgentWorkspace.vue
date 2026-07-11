@@ -12,6 +12,7 @@ import {
   serializeMessages,
   setActiveSessionId,
 } from '../utils/chatSession'
+import { consumeAgentHandoff } from '../utils/agentHandoff'
 import ToolStep from '../components/agent/ToolStep.vue'
 import TraceInspector from '../components/agent/TraceInspector.vue'
 
@@ -172,9 +173,9 @@ function handleStreamEvent(turn, event, data) {
   }
 }
 
-async function send() {
-  const msg = input.value.trim()
-  if (!msg || sending.value) return
+async function sendMessage(rawMsg) {
+  const msg = (typeof rawMsg === 'string' ? rawMsg : input.value).trim()
+  if (!msg || sending.value) return false
   if (!props.health.llm_configured) {
     messages.value.push({
       id: `u-${Date.now()}`,
@@ -187,14 +188,14 @@ async function send() {
       content:
         'LLM 未配置，无法运行 Agent。请编辑 config.yaml 填入 openai_api_key 后重启服务。',
     })
-    input.value = ''
-    return
+    if (typeof rawMsg !== 'string') input.value = ''
+    return false
   }
 
   const sessionId = await ensureSession()
 
   messages.value.push({ id: `u-${Date.now()}`, role: 'user', content: msg })
-  input.value = ''
+  if (typeof rawMsg !== 'string') input.value = ''
   sending.value = true
   selectedTool.value = null
 
@@ -241,12 +242,34 @@ async function send() {
     sending.value = false
     await scrollToBottom()
   }
+  return true
+}
+
+async function send() {
+  await sendMessage()
+}
+
+async function applyPendingHandoff() {
+  const handoff = consumeAgentHandoff()
+  if (!handoff?.message) return false
+
+  const data = await api.createSession(handoff.title || '健康审查处理')
+  activeSessionId.value = data.id
+  setActiveSessionId(data.id)
+  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  selectedTool.value = null
+  selectedTurn.value = null
+  await refreshSessions()
+  await sendMessage(handoff.message)
+  return true
 }
 
 onMounted(async () => {
   sessionsLoading.value = true
   try {
     await refreshSessions()
+    if (await applyPendingHandoff()) return
+
     const savedId = getActiveSessionId()
     if (savedId && sessions.value.some((s) => s.id === savedId)) {
       await loadSession(savedId)

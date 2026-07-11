@@ -10,6 +10,8 @@ def test_tool_labels_cover_known_tools() -> None:
     assert "search_mod" in TOOL_LABELS
     assert "check_dependencies" in TOOL_LABELS
     assert "install_mod_with_dependencies" in TOOL_LABELS
+    assert "list_pending_mods" in TOOL_LABELS
+    assert "audit_installation" in TOOL_LABELS
 
 
 def test_stream_yields_tool_deltas() -> None:

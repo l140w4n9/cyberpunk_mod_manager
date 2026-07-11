@@ -11,7 +11,7 @@ from sqlmodel import select
 
 from ..config import config
 from ..installer import Installer, get_uninstall_plan
-from ..models import Mod, ModStatus
+from ..models import Mod, ModStatus, ModDependency, InstallRecord
 from ..nexus.client import NexusAPIError, NexusClient
 from ..nexus.dependencies import (
     collect_dependencies,
@@ -23,6 +23,7 @@ from ..nexus.dependencies import (
 )
 from ..nexus.schemas import ModDetails
 from ..storage.db import get_session
+from .concurrency import DEFAULT_CONCURRENCY, gather_bounded
 from .summary import display_summary, ensure_mod_summary
 
 logger = logging.getLogger(__name__)
@@ -298,15 +299,18 @@ async def refresh_mod_summaries(mod_ids: list[int] | None = None) -> None:
     """为缺少 AI 摘要的模组批量生成摘要。"""
     with get_session() as session:
         mods = session.exec(select(Mod)).all()
-        targets = [
-            m.nexus_mod_id
-            for m in mods
-            if (not mod_ids or m.nexus_mod_id in mod_ids)
-            and not m.summary_line
-            and (m.description or m.name)
-        ]
-    for mod_id in targets:
-        await ensure_mod_summary(mod_id)
+    targets = [
+        m.nexus_mod_id
+        for m in mods
+        if (not mod_ids or m.nexus_mod_id in mod_ids)
+        and not m.summary_line
+        and (m.description or m.name)
+    ]
+    if targets:
+        await gather_bounded(
+            [ensure_mod_summary(mod_id) for mod_id in targets],
+            concurrency=DEFAULT_CONCURRENCY,
+        )
 
 
 async def refresh_dependencies(mod_id: int) -> list[dict]:
@@ -408,6 +412,27 @@ def _mod_status_info(mod_id: int) -> tuple[str, bool]:
             return ModStatus.NOT_INSTALLED.value, False
         status = _status_str(mod.status)
         return status, status == ModStatus.INSTALLED.value
+
+
+def batch_mod_status_info(mod_ids: list[int]) -> dict[int, tuple[str, bool]]:
+    """批量查询模组安装状态。"""
+    if not mod_ids:
+        return {}
+    unique_ids = list(dict.fromkeys(mod_ids))
+    with get_session() as session:
+        mods = session.exec(
+            select(Mod).where(Mod.nexus_mod_id.in_(unique_ids))
+        ).all()
+    by_id = {mod.nexus_mod_id: mod for mod in mods}
+    result: dict[int, tuple[str, bool]] = {}
+    for mod_id in unique_ids:
+        mod = by_id.get(mod_id)
+        if mod is None:
+            result[mod_id] = (ModStatus.NOT_INSTALLED.value, False)
+            continue
+        status = _status_str(mod.status)
+        result[mod_id] = (status, status == ModStatus.INSTALLED.value)
+    return result
 
 
 def _already_installed_json(mod_id: int) -> str:
@@ -524,7 +549,9 @@ async def install_mod_with_dependencies(
     failed_deps: list[dict] = []
 
     if install_dependencies:
-        for dep in missing_dependencies(mod_id):
+        deps = missing_dependencies(mod_id)
+
+        async def install_dep(dep) -> tuple[dict | None, dict | None]:
             dep_result = await install_mod(
                 dep.nexus_mod_id,
                 allow_local_fallback=allow_local_fallback,
@@ -532,23 +559,28 @@ async def install_mod_with_dependencies(
                 skip_installed=skip_installed,
             )
             if is_error(dep_result):
-                failed_deps.append(
-                    {
-                        "nexus_mod_id": dep.nexus_mod_id,
-                        "name": dep.name,
-                        "error": json.loads(dep_result).get("error"),
-                    }
-                )
-            else:
-                dep_data = json.loads(dep_result)
-                installed_deps.append(
-                    {
-                        "nexus_mod_id": dep.nexus_mod_id,
-                        "name": dep.name,
-                        "result": dep_data,
-                        "skipped": bool(dep_data.get("skipped")),
-                    }
-                )
+                return None, {
+                    "nexus_mod_id": dep.nexus_mod_id,
+                    "name": dep.name,
+                    "error": json.loads(dep_result).get("error"),
+                }
+            dep_data = json.loads(dep_result)
+            return {
+                "nexus_mod_id": dep.nexus_mod_id,
+                "name": dep.name,
+                "result": dep_data,
+                "skipped": bool(dep_data.get("skipped")),
+            }, None
+
+        dep_outcomes = await gather_bounded(
+            [install_dep(dep) for dep in deps],
+            concurrency=DEFAULT_CONCURRENCY,
+        )
+        for ok_item, fail_item in dep_outcomes:
+            if ok_item is not None:
+                installed_deps.append(ok_item)
+            if fail_item is not None:
+                failed_deps.append(fail_item)
 
     main_result = await install_mod(
         mod_id,
@@ -581,8 +613,13 @@ def scan_local_folder(folder_path: str) -> str:
     if not folder.is_dir():
         return error_json(f"文件夹不存在: {folder}")
     payload = scan_folder(folder)
+    detected_ids = [int(item["mod_id"]) for item in payload["detected"]]
+    status_map = batch_mod_status_info(detected_ids)
     for item in payload["detected"]:
-        status, installed = _mod_status_info(int(item["mod_id"]))
+        mod_id = int(item["mod_id"])
+        status, installed = status_map.get(
+            mod_id, (ModStatus.NOT_INSTALLED.value, False)
+        )
         item["status"] = status
         item["installed"] = installed
     payload["downloads_dir"] = str(config.downloads_dir)
@@ -640,9 +677,12 @@ async def install_local_folder(
 
     skipped: list[dict] = []
     if skip_installed:
+        status_map = batch_mod_status_info(targets)
         pending: list[int] = []
         for mod_id in targets:
-            _status, installed = _mod_status_info(mod_id)
+            _status, installed = status_map.get(
+                mod_id, (ModStatus.NOT_INSTALLED.value, False)
+            )
             if installed:
                 skipped.append({"mod_id": mod_id, "reason": "already_installed"})
             else:
@@ -674,18 +714,22 @@ async def install_local_folder(
                 if dep.nexus_mod_id in archive_by_id:
                     register_ids.add(dep.nexus_mod_id)
 
-    for mod_id in register_ids:
+    async def register_mod(mod_id: int) -> None:
         archive = archive_by_id.get(mod_id)
         if archive is None:
-            continue
+            return
         register_local_archive(mod_id, archive)
         try:
             await ensure_mod_in_inventory(mod_id)
         except Exception as exc:
             logger.warning("ensure_mod_in_inventory(%s) failed: %s", mod_id, exc)
 
-    results: list[dict] = []
-    for mod_id in targets:
+    await gather_bounded(
+        [register_mod(mod_id) for mod_id in register_ids],
+        concurrency=DEFAULT_CONCURRENCY,
+    )
+
+    async def install_target(mod_id: int) -> dict:
         if install_dependencies:
             raw = await install_mod_with_dependencies(
                 mod_id,
@@ -701,7 +745,12 @@ async def install_local_folder(
             )
         data = json.loads(raw)
         data["mod_id"] = mod_id
-        results.append(data)
+        return data
+
+    results = await gather_bounded(
+        [install_target(mod_id) for mod_id in targets],
+        concurrency=DEFAULT_CONCURRENCY,
+    )
 
     succeeded = [
         r["mod_id"]
@@ -744,3 +793,59 @@ def check_dependencies_report(mod_id: int) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def _is_pending_inventory_mod(mod: Mod) -> bool:
+    return _status_str(mod.status) != ModStatus.INSTALLED.value
+
+
+def delete_mod_from_inventory(nexus_mod_id: int) -> dict:
+    """从库存移除模组记录（仅允许未安装状态）。"""
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == nexus_mod_id)
+        ).first()
+        if mod is None:
+            return {"error": f"Mod {nexus_mod_id} not found", "mod_id": nexus_mod_id}
+        if not _is_pending_inventory_mod(mod):
+            return {
+                "error": "已安装模组请先在「已安装」页卸载，不能直接从库存清理",
+                "mod_id": nexus_mod_id,
+            }
+        internal_id = mod.id
+        name = mod.name or ""
+        for dep in session.exec(
+            select(ModDependency).where(ModDependency.owner_mod_id == internal_id)
+        ).all():
+            session.delete(dep)
+        for record in session.exec(
+            select(InstallRecord).where(InstallRecord.mod_id == internal_id)
+        ).all():
+            session.delete(record)
+        session.delete(mod)
+        session.commit()
+    return {"deleted": nexus_mod_id, "mod_id": nexus_mod_id, "name": name}
+
+
+def cleanup_pending_mods(mod_ids: list[int] | None = None) -> dict:
+    """批量清理待安装模组（从库存删除，不触碰游戏目录）。"""
+    with get_session() as session:
+        mods = session.exec(select(Mod)).all()
+    pending = [m for m in mods if _is_pending_inventory_mod(m)]
+    if mod_ids is not None:
+        allowed = set(mod_ids)
+        pending = [m for m in pending if m.nexus_mod_id in allowed]
+    deleted: list[dict] = []
+    failed: list[dict] = []
+    for mod in pending:
+        result = delete_mod_from_inventory(mod.nexus_mod_id)
+        if result.get("error"):
+            failed.append(result)
+        else:
+            deleted.append(result)
+    return {
+        "deleted": deleted,
+        "failed": failed,
+        "deleted_count": len(deleted),
+        "failed_count": len(failed),
+    }

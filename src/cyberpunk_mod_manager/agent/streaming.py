@@ -28,6 +28,10 @@ TOOL_LABELS = {
     "install_local_folder": "文件夹批量本地安装",
     "uninstall_mod": "卸载模组",
     "list_mods": "列出库存模组",
+    "list_pending_mods": "列出待安装模组",
+    "list_incomplete_mods": "列出依赖不全模组",
+    "check_mod_updates": "检查模组更新",
+    "audit_installation": "审查安装健康状态",
     "get_uninstall_plan_tool": "查看卸载计划",
 }
 

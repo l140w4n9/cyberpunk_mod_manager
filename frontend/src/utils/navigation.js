@@ -5,6 +5,7 @@ export const VALID_VIEWS = new Set([
   'mods-pending',
   'mods-incomplete',
   'collections',
+  'maintenance',
 ])
 
 export function viewFromHash() {

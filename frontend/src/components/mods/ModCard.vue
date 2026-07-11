@@ -7,9 +7,10 @@ defineProps({
   showWarning: { type: Boolean, default: false },
   filterMode: { type: String, default: 'installed' },
   installing: { type: Boolean, default: false },
+  cleaning: { type: Boolean, default: false },
 })
 
-defineEmits(['uninstall', 'install', 'install-with-deps'])
+defineEmits(['uninstall', 'install', 'install-with-deps', 'cleanup'])
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString('zh-CN') : '—'
@@ -52,6 +53,13 @@ function summaryLabel(source) {
             @click="$emit('install-with-deps', mod.nexus_mod_id)"
           >
             含依赖安装
+          </button>
+          <button
+            class="btn-danger btn-sm"
+            :disabled="installing || cleaning"
+            @click="$emit('cleanup', mod.nexus_mod_id)"
+          >
+            {{ cleaning ? '清理中...' : '清理' }}
           </button>
         </template>
         <button

@@ -9,6 +9,7 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   installing: { type: Boolean, default: false },
   status: { type: Object, default: () => ({ message: '', type: '' }) },
+  cleaning: { type: Boolean, default: false },
   /** installed | pending | incomplete */
   filterMode: { type: String, default: 'installed' },
 })
@@ -21,6 +22,8 @@ const emit = defineEmits([
   'scan-local-folder',
   'uninstall',
   'check-deps',
+  'cleanup-mod',
+  'cleanup-all-pending',
 ])
 
 const modIdInput = ref('')
@@ -111,6 +114,26 @@ function installFromFolder() {
   }
 
   emit('install-local-folder', { folderPath: folder, modIds })
+}
+
+function cleanupMod(modId) {
+  const mod = filteredMods.value.find((m) => m.nexus_mod_id === modId)
+  const label = mod?.name ? `${mod.name} (#${modId})` : `#${modId}`
+  if (!window.confirm(`从库存清理 ${label}？\n仅删除记录，不影响游戏目录（未安装模组）。`)) return
+  emit('cleanup-mod', modId)
+}
+
+function cleanupAllPending() {
+  const count = filteredMods.value.length
+  if (!count) return
+  if (
+    !window.confirm(
+      `一键清理全部 ${count} 个待安装模组？\n将从库存删除记录，不会删除游戏内文件。`,
+    )
+  ) {
+    return
+  }
+  emit('cleanup-all-pending', filteredMods.value.map((m) => m.nexus_mod_id))
 }
 </script>
 
@@ -210,7 +233,18 @@ function installFromFolder() {
     <div v-if="loading" class="empty-state"><span class="spinner" /> 加载中...</div>
     <div v-else-if="!filteredMods.length" class="empty-state">{{ pageMeta.empty }}</div>
 
-    <div v-else class="mod-grid">
+    <section v-else-if="filterMode === 'pending'" class="pending-toolbar panel">
+      <p class="toolbar-hint">清理会从库存移除记录，适用于误添加或不再需要的待安装项。</p>
+      <button
+        class="btn-danger"
+        :disabled="installing || cleaning"
+        @click="cleanupAllPending"
+      >
+        {{ cleaning ? '清理中...' : `一键清理全部 (${filteredMods.length})` }}
+      </button>
+    </section>
+
+    <div v-if="!loading && filteredMods.length" class="mod-grid">
       <ModCard
         v-for="mod in filteredMods"
         :key="mod.id"
@@ -218,9 +252,11 @@ function installFromFolder() {
         :filter-mode="filterMode"
         :show-warning="filterMode === 'incomplete'"
         :installing="installing"
+        :cleaning="cleaning"
         @install="$emit('install', $event)"
         @uninstall="$emit('uninstall', $event)"
         @install-with-deps="$emit('install-with-deps', $event)"
+        @cleanup="cleanupMod"
       />
     </div>
 
@@ -313,6 +349,22 @@ function installFromFolder() {
 }
 .ok-text { color: var(--ok); }
 .pending-text { color: var(--warn); }
+.pending-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+}
+.toolbar-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 520px;
+  line-height: 1.4;
+}
 
 .empty-state {
   text-align: center;

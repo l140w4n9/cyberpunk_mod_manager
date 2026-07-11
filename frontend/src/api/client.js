@@ -156,6 +156,30 @@ export const api = {
   getCollectionJob: (jobId) => request(`/api/collections/jobs/${jobId}`),
   cancelCollectionJob: (jobId) =>
     request(`/api/collections/jobs/${jobId}/cancel`, { method: 'POST' }),
+  listPendingMods: () => request('/api/mods/pending'),
+  listIncompleteMods: () => request('/api/mods/incomplete'),
+  deleteMod: (modId) =>
+    request(`/api/mods/${modId}`, { method: 'DELETE' }),
+  cleanupPendingMods: (modIds = null) =>
+    request('/api/mods/cleanup-pending', {
+      method: 'POST',
+      body: JSON.stringify({ mod_ids: modIds }),
+    }),
+  checkModUpdates: () =>
+    request('/api/mods/check-updates', { method: 'POST' }),
+  auditInstallation: (autoFix = false) =>
+    request('/api/mods/audit', {
+      method: 'POST',
+      body: JSON.stringify({ auto_fix: autoFix }),
+    }),
+  startAuditJob: (autoFix = false) =>
+    request('/api/mods/audit/start', {
+      method: 'POST',
+      body: JSON.stringify({ auto_fix: autoFix }),
+    }),
+  getAuditJob: (jobId) => request(`/api/mods/audit/jobs/${jobId}`),
+  startCheckUpdatesJob: () =>
+    request('/api/mods/check-updates/start', { method: 'POST' }),
   getConfig: async (retries = 2) => {
     let lastError
     for (let attempt = 0; attempt <= retries; attempt += 1) {

@@ -10,8 +10,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ..models import ModStatus
 from ..nexus.collections import CollectionParseError, fetch_collection, parse_collection_url
 from . import mod_ops
+from .concurrency import DEFAULT_CONCURRENCY, gather_bounded
 
 
 class QueueItemStatus(str, Enum):
@@ -131,8 +133,11 @@ async def parse_collection_url_to_queue(url: str) -> dict[str, Any]:
 
     queue: list[QueueItem] = []
     installed_count = 0
+    status_map = mod_ops.batch_mod_status_info([entry.mod_id for entry in info.mods])
     for entry in info.mods:
-        status, installed = mod_ops._mod_status_info(entry.mod_id)
+        status, installed = status_map.get(
+            entry.mod_id, (ModStatus.NOT_INSTALLED.value, False)
+        )
         if installed:
             installed_count += 1
         queue.append(
@@ -235,24 +240,26 @@ async def _run_job(
 
     job.state = JobState.RUNNING.value
     job.updated_at = _utc_now()
+    state_lock = asyncio.Lock()
 
-    for item in job.items:
+    async def process_item(item: QueueItem) -> None:
         if not item.selected:
-            continue
+            return
         if job.cancel_requested:
             item.status = QueueItemStatus.CANCELLED.value
             item.message = "已取消"
-            continue
+            return
         if item.status not in (
             QueueItemStatus.PENDING.value,
             QueueItemStatus.SKIPPED.value,
         ):
-            continue
+            return
 
-        job.current_mod_id = item.mod_id
-        item.status = QueueItemStatus.RUNNING.value
-        item.message = "安装中..."
-        job.updated_at = _utc_now()
+        async with state_lock:
+            job.current_mod_id = item.mod_id
+            item.status = QueueItemStatus.RUNNING.value
+            item.message = "安装中..."
+            job.updated_at = _utc_now()
 
         try:
             if install_dependencies:
@@ -283,8 +290,13 @@ async def _run_job(
             item.status = QueueItemStatus.FAILED.value
             item.message = str(exc)
 
-        job.updated_at = _utc_now()
-        await asyncio.sleep(0.5)
+        async with state_lock:
+            job.updated_at = _utc_now()
+
+    await gather_bounded(
+        [process_item(item) for item in job.items],
+        concurrency=DEFAULT_CONCURRENCY,
+    )
 
     job.current_mod_id = None
     job.state = (

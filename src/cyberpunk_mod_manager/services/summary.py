@@ -17,6 +17,7 @@ from ..storage.db import get_session
 logger = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_html(text: str) -> str:
@@ -80,20 +81,98 @@ def _parse_chat_response(resp: httpx.Response) -> dict:
         raise ValueError(f"LLM 响应不是有效 JSON: {snippet}") from exc
 
 
-def _extract_message_content(data: dict) -> str:
-    """从 chat completion 结果提取文本（兼容 reasoning 模型）。"""
+def extract_llm_message_text(data: dict, *, full_reasoning: bool = False) -> str:
+    """从 chat completion 提取文本；JSON 任务应开启 full_reasoning。"""
     message = (data.get("choices") or [{}])[0].get("message") or {}
     content = (message.get("content") or "").strip()
     if content:
         return content
-    # 部分推理模型仅填充 reasoning_content，最终 content 为空
     reasoning = (message.get("reasoning_content") or "").strip()
-    if reasoning:
-        for sep in ("。", ". ", "\n"):
-            if sep in reasoning:
-                return reasoning.split(sep, 1)[0].strip()
-        return reasoning[:96].rstrip() + ("…" if len(reasoning) > 96 else "")
-    return ""
+    if not reasoning:
+        return ""
+    if full_reasoning:
+        return reasoning
+    for sep in ("。", ". ", "\n"):
+        if sep in reasoning:
+            return reasoning.split(sep, 1)[0].strip()
+    return reasoning[:96].rstrip() + ("…" if len(reasoning) > 96 else "")
+
+
+def _extract_message_content(data: dict) -> str:
+    """从 chat completion 结果提取文本（兼容 reasoning 模型）。"""
+    return extract_llm_message_text(data, full_reasoning=False)
+
+
+def _extract_balanced_json(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
+
+
+def parse_llm_json_object(text: str) -> dict:
+    """解析 LLM 返回的 JSON 对象（兼容 markdown 代码块与前后缀文本）。"""
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("LLM 返回空内容")
+
+    candidates: list[str] = []
+    fence = _JSON_FENCE_RE.search(raw)
+    if fence:
+        fenced = fence.group(1).strip()
+        if fenced:
+            candidates.append(fenced)
+    balanced = _extract_balanced_json(raw)
+    if balanced:
+        candidates.append(balanced)
+    candidates.append(raw)
+
+    last_error: json.JSONDecodeError | None = None
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(
+        f"无法解析 LLM JSON: {last_error}" if last_error else "LLM 未返回 JSON 对象"
+    )
+
+
+def parse_llm_json_from_response(data: dict) -> dict:
+    """从 chat completion 响应解析 JSON 对象。"""
+    text = extract_llm_message_text(data, full_reasoning=True)
+    if not text:
+        text = extract_llm_message_text(data, full_reasoning=False)
+    return parse_llm_json_object(text)
 
 
 async def generate_ai_summary(name: str, description: str) -> tuple[str, str]:
