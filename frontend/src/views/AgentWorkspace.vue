@@ -308,12 +308,14 @@ onMounted(async () => {
         </div>
       </header>
 
-      <div v-if="!health.llm_configured" class="config-alert">
+      <div v-if="!health.data_dir_configured" class="config-alert warn-box">
+        <strong>数据目录未配置</strong>
+        <p>请先在侧栏打开「设置」，填写<strong>数据存放目录</strong>（必填）后保存。</p>
+      </div>
+
+      <div v-else-if="!health.llm_configured" class="config-alert">
         <strong>LLM 未配置</strong>
-        <p>
-          请在 <code>cyberpunk_mod_manager/config.yaml</code> 中设置
-          <code>openai_api_key</code>，或设置环境变量 <code>OPENAI_API_KEY</code>。
-        </p>
+        <p>请在侧栏「设置」页填入 LLM API Key，或编辑 config.yaml。</p>
         <p v-if="health.config_file" class="mono">当前配置: {{ health.config_file || '（未找到配置文件）' }}</p>
       </div>
 
@@ -531,6 +533,11 @@ onMounted(async () => {
   font-size: 13px;
 }
 .config-alert p { margin-top: 6px; color: var(--text); line-height: 1.5; }
+.warn-box {
+  border-color: rgba(255, 176, 32, 0.35);
+  background: rgba(255, 176, 32, 0.08);
+  color: var(--warn);
+}
 .config-alert code {
   font-family: var(--font-mono);
   font-size: 12px;

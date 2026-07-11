@@ -5,9 +5,11 @@ import DepChipList from './DepChipList.vue'
 defineProps({
   mod: { type: Object, required: true },
   showWarning: { type: Boolean, default: false },
+  filterMode: { type: String, default: 'installed' },
+  installing: { type: Boolean, default: false },
 })
 
-defineEmits(['uninstall', 'install-with-deps'])
+defineEmits(['uninstall', 'install', 'install-with-deps'])
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleString('zh-CN') : '—'
@@ -36,16 +38,34 @@ function summaryLabel(source) {
         </p>
       </div>
       <div class="mod-actions">
+        <template v-if="filterMode === 'pending'">
+          <button
+            class="btn-primary btn-sm"
+            :disabled="installing"
+            @click="$emit('install', mod.nexus_mod_id)"
+          >
+            {{ installing ? '安装中...' : '安装' }}
+          </button>
+          <button
+            class="btn-ghost btn-sm"
+            :disabled="installing"
+            @click="$emit('install-with-deps', mod.nexus_mod_id)"
+          >
+            含依赖安装
+          </button>
+        </template>
         <button
-          v-if="showWarning"
+          v-if="filterMode === 'incomplete' || showWarning"
           class="btn-primary btn-sm"
+          :disabled="installing"
           @click="$emit('install-with-deps', mod.nexus_mod_id)"
         >
-          补装依赖
+          {{ installing ? '安装中...' : '补装依赖' }}
         </button>
         <button
+          v-if="filterMode === 'installed'"
           class="btn-danger btn-sm"
-          :disabled="mod.status !== 'installed'"
+          :disabled="mod.status !== 'installed' || installing"
           @click="$emit('uninstall', mod.nexus_mod_id)"
         >
           卸载

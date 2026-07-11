@@ -6,6 +6,8 @@ import asyncio
 import json
 from typing import Optional
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import select
@@ -20,6 +22,14 @@ from ..storage.db import get_session
 router = APIRouter()
 
 
+def _ensure_data_dir() -> None:
+    if not config.has_data_dir:
+        raise HTTPException(
+            503,
+            detail="data_dir 未配置，请先在「设置」页指定数据存放目录",
+        )
+
+
 class ModInstallRequest(BaseModel):
     mod_id: int
     force: bool = False
@@ -28,6 +38,17 @@ class ModInstallRequest(BaseModel):
 class LocalInstallRequest(BaseModel):
     mod_id: int
     archive_name: str
+
+
+class LocalFolderScanRequest(BaseModel):
+    folder_path: str
+
+
+class LocalFolderInstallRequest(BaseModel):
+    folder_path: str
+    mod_ids: list[int] | None = None
+    install_dependencies: bool = True
+    skip_installed: bool = True
 
 
 class DependencyOut(BaseModel):
@@ -76,8 +97,12 @@ def _load_all_mods() -> list[Mod]:
 @router.get("", response_model=list[ModOut])
 async def list_mods(
     refresh_summaries: bool = Query(False, description="为缺少摘要的模组调用 LLM 生成"),
+    refresh_dep_names: bool = Query(
+        False, description="从库存与 Nexus API 补全缺失的依赖名称"
+    ),
 ) -> list[ModOut]:
     """列出所有库存模组（含依赖关系与一句话摘要）。"""
+    _ensure_data_dir()
     from ..nexus.dependencies import (
         enrich_dependency_names_from_nexus,
         enrich_dependency_names_sync,
@@ -85,8 +110,9 @@ async def list_mods(
 
     # 将同步 DB 操作卸载到线程池，避免阻塞事件循环
     mods = await asyncio.to_thread(_load_all_mods)
-    await asyncio.to_thread(enrich_dependency_names_sync)
-    await enrich_dependency_names_from_nexus()
+    if refresh_dep_names:
+        await asyncio.to_thread(enrich_dependency_names_sync)
+        await enrich_dependency_names_from_nexus()
 
     if refresh_summaries and config.openai_api_key:
         await mod_ops.refresh_mod_summaries()
@@ -151,7 +177,11 @@ def uninstall_plan(mod_id: int) -> dict:
 async def install_mod(req: ModInstallRequest) -> dict:
     """下载并安装模组（Premium 限制时尝试本地压缩包）。"""
     return _parse_result(
-        await mod_ops.install_mod(req.mod_id, allow_local_fallback=True)
+        await mod_ops.install_mod(
+            req.mod_id,
+            allow_local_fallback=True,
+            skip_installed=not req.force,
+        )
     )
 
 
@@ -163,16 +193,37 @@ async def install_mod_with_deps(req: ModInstallRequest) -> dict:
             req.mod_id,
             install_dependencies=True,
             allow_local_fallback=True,
+            skip_installed=not req.force,
         )
     )
 
 
 @router.post("/install-local")
 async def install_local_mod(req: LocalInstallRequest) -> dict:
-    """从 downloads 目录的本地压缩包安装模组。"""
-    archive_path = config.downloads_dir / req.archive_name
+    """从本地压缩包安装模组（downloads 或绝对路径）。"""
+    path = Path(req.archive_name)
+    archive_path = path if path.is_absolute() else config.downloads_dir / req.archive_name
     await mod_ops.ensure_mod_in_inventory(req.mod_id)
     return _parse_result(mod_ops.install_from_archive(req.mod_id, archive_path))
+
+
+@router.post("/scan-local")
+async def scan_local_folder(req: LocalFolderScanRequest) -> dict:
+    """扫描文件夹，识别压缩包中的模组 ID。"""
+    return _parse_result(mod_ops.scan_local_folder(req.folder_path))
+
+
+@router.post("/install-local-folder")
+async def install_local_folder(req: LocalFolderInstallRequest) -> dict:
+    """从文件夹批量本地安装（自动识别 ID 与依赖）。"""
+    return _parse_result(
+        await mod_ops.install_local_folder(
+            req.folder_path,
+            mod_ids=req.mod_ids,
+            install_dependencies=req.install_dependencies,
+            skip_installed=req.skip_installed,
+        )
+    )
 
 
 @router.post("/uninstall")

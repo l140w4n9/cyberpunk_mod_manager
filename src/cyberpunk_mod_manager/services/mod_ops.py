@@ -47,18 +47,13 @@ def is_error(result: str) -> bool:
 
 def find_local_archive(mod_id: int) -> Path | None:
     """在 downloads 目录查找与 mod_id 匹配的本地压缩包。"""
+    registered = resolve_local_archive_path(mod_id)
+    if registered is not None:
+        return registered
+
     downloads = config.downloads_dir
     if not downloads.exists():
         return None
-
-    with get_session() as session:
-        mod = session.exec(
-            select(Mod).where(Mod.nexus_mod_id == mod_id)
-        ).first()
-        if mod and mod.local_path:
-            candidate = downloads / mod.local_path
-            if candidate.is_file():
-                return candidate
 
     patterns = [
         f"{mod_id}*.zip",
@@ -74,6 +69,23 @@ def find_local_archive(mod_id: int) -> Path | None:
     if not matches:
         return None
     return max(matches, key=lambda p: p.stat().st_mtime)
+
+
+def resolve_local_archive_path(mod_id: int) -> Path | None:
+    """从库存登记的 local_path 解析本地压缩包绝对路径。"""
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == mod_id)
+        ).first()
+        if mod is None or not mod.local_path:
+            return None
+        stored = Path(mod.local_path)
+        if stored.is_absolute() and stored.is_file():
+            return stored
+        candidate = config.downloads_dir / mod.local_path
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _apply_details_to_mod(mod: Mod, details: ModDetails) -> None:
@@ -151,8 +163,12 @@ def get_or_create_mod_stub(mod_id: int, name: str = "") -> int:
 
 
 def register_local_archive(mod_id: int, archive_path: Path) -> str:
-    """登记本地压缩包路径到库存。"""
-    rel = str(archive_path.relative_to(config.downloads_dir))
+    """登记本地压缩包路径到库存（支持 downloads 外绝对路径）。"""
+    resolved = archive_path.resolve()
+    try:
+        stored = str(resolved.relative_to(config.downloads_dir.resolve()))
+    except ValueError:
+        stored = str(resolved)
     get_or_create_mod_stub(mod_id)
     with get_session() as session:
         mod = session.exec(
@@ -160,12 +176,13 @@ def register_local_archive(mod_id: int, archive_path: Path) -> str:
         ).first()
         if mod is None:
             raise RuntimeError(f"Mod {mod_id} missing after upsert")
-        mod.local_path = rel
-        mod.file_name = archive_path.name
-        mod.status = ModStatus.DOWNLOADED
+        mod.local_path = stored
+        mod.file_name = resolved.name
+        if mod.status != ModStatus.INSTALLED:
+            mod.status = ModStatus.DOWNLOADED
         session.add(mod)
         session.commit()
-    return rel
+    return stored
 
 
 async def ensure_mod_in_inventory(
@@ -381,17 +398,70 @@ async def download_mod(mod_id: int) -> str:
     )
 
 
+def _mod_status_info(mod_id: int) -> tuple[str, bool]:
+    """返回模组状态字符串与是否已安装。"""
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == mod_id)
+        ).first()
+        if mod is None:
+            return ModStatus.NOT_INSTALLED.value, False
+        status = _status_str(mod.status)
+        return status, status == ModStatus.INSTALLED.value
+
+
+def _already_installed_json(mod_id: int) -> str:
+    """已安装模组的标准跳过响应。"""
+    status, _ = _mod_status_info(mod_id)
+    name = ""
+    with get_session() as session:
+        mod = session.exec(
+            select(Mod).where(Mod.nexus_mod_id == mod_id)
+        ).first()
+        if mod is not None:
+            name = mod.name or ""
+    label = f"({name}) " if name else ""
+    return json.dumps(
+        {
+            "mod_id": mod_id,
+            "name": name,
+            "skipped": True,
+            "reason": "already_installed",
+            "status": status,
+            "message": f"模组 {mod_id} {label}已安装，已跳过".strip(),
+        },
+        ensure_ascii=False,
+    )
+
+
 async def install_mod(
     mod_id: int,
     *,
     allow_local_fallback: bool = True,
     skip_download: bool = False,
+    local_only: bool = False,
+    skip_installed: bool = True,
 ) -> str:
     """下载（或本地回退）并安装模组。"""
     await ensure_mod_in_inventory(mod_id)
 
+    if skip_installed:
+        _status, installed = _mod_status_info(mod_id)
+        if installed:
+            return _already_installed_json(mod_id)
+
     used_local = False
-    if not skip_download:
+    if local_only or skip_download:
+        local = resolve_local_archive_path(mod_id) or find_local_archive(mod_id)
+        if local is None:
+            return error_json(
+                f"未找到模组 {mod_id} 的本地压缩包",
+                mod_id=mod_id,
+                local_only=local_only,
+            )
+        register_local_archive(mod_id, local)
+        used_local = True
+    elif not skip_download:
         dl_result = await download_mod(mod_id)
         if is_error(dl_result):
             data = json.loads(dl_result)
@@ -412,18 +482,10 @@ async def install_mod(
             else:
                 return dl_result
 
-    with get_session() as session:
-        mod = session.exec(
-            select(Mod).where(Mod.nexus_mod_id == mod_id)
-        ).first()
-        if mod is None:
-            return error_json(f"Mod {mod_id} not in inventory")
-        local_rel = mod.local_path
-
-    if not local_rel:
+    archive_path = resolve_local_archive_path(mod_id)
+    if archive_path is None:
         return error_json(f"No local archive for mod {mod_id}")
 
-    archive_path = config.downloads_dir / local_rel
     result = install_from_archive(mod_id, archive_path)
     if is_error(result):
         return result
@@ -440,8 +502,23 @@ async def install_mod_with_dependencies(
     *,
     install_dependencies: bool = True,
     allow_local_fallback: bool = True,
+    local_only: bool = False,
+    skip_installed: bool = True,
 ) -> str:
     """安装模组及其缺失的前置依赖。"""
+    await ensure_mod_in_inventory(mod_id)
+
+    if skip_installed:
+        _status, installed = _mod_status_info(mod_id)
+        if installed:
+            payload = json.loads(_already_installed_json(mod_id))
+            payload["dependencies"] = [
+                d.to_dict() for d in get_dependency_infos(mod_id)
+            ]
+            payload["dependencies_installed"] = []
+            payload["dependencies_failed"] = []
+            return json.dumps(payload, ensure_ascii=False)
+
     await refresh_dependencies(mod_id)
     installed_deps: list[dict] = []
     failed_deps: list[dict] = []
@@ -451,6 +528,8 @@ async def install_mod_with_dependencies(
             dep_result = await install_mod(
                 dep.nexus_mod_id,
                 allow_local_fallback=allow_local_fallback,
+                local_only=local_only,
+                skip_installed=skip_installed,
             )
             if is_error(dep_result):
                 failed_deps.append(
@@ -461,16 +540,21 @@ async def install_mod_with_dependencies(
                     }
                 )
             else:
+                dep_data = json.loads(dep_result)
                 installed_deps.append(
                     {
                         "nexus_mod_id": dep.nexus_mod_id,
                         "name": dep.name,
-                        "result": json.loads(dep_result),
+                        "result": dep_data,
+                        "skipped": bool(dep_data.get("skipped")),
                     }
                 )
 
     main_result = await install_mod(
-        mod_id, allow_local_fallback=allow_local_fallback
+        mod_id,
+        allow_local_fallback=allow_local_fallback,
+        local_only=local_only,
+        skip_installed=skip_installed,
     )
     if is_error(main_result):
         payload = json.loads(main_result)
@@ -484,6 +568,162 @@ async def install_mod_with_dependencies(
     payload["dependencies_failed"] = failed_deps
     payload["dependencies"] = [d.to_dict() for d in get_dependency_infos(mod_id)]
     return json.dumps(payload, ensure_ascii=False)
+
+
+def scan_local_folder(folder_path: str) -> str:
+    """扫描本地文件夹，识别压缩包与模组 ID。"""
+    from .local_scan import is_downloads_dir, resolve_folder_path, scan_folder
+
+    try:
+        folder = resolve_folder_path(folder_path, base=config.downloads_dir)
+    except ValueError as exc:
+        return error_json(str(exc))
+    if not folder.is_dir():
+        return error_json(f"文件夹不存在: {folder}")
+    payload = scan_folder(folder)
+    for item in payload["detected"]:
+        status, installed = _mod_status_info(int(item["mod_id"]))
+        item["status"] = status
+        item["installed"] = installed
+    payload["downloads_dir"] = str(config.downloads_dir)
+    payload["is_downloads_dir"] = is_downloads_dir(folder, config.downloads_dir)
+    payload["installed_count"] = sum(
+        1 for item in payload["detected"] if item.get("installed")
+    )
+    payload["pending_count"] = sum(
+        1 for item in payload["detected"] if not item.get("installed")
+    )
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def install_local_folder(
+    folder_path: str,
+    mod_ids: list[int] | None = None,
+    *,
+    install_dependencies: bool = True,
+    skip_installed: bool = True,
+) -> str:
+    """从文件夹批量本地安装（自动识别 ID、处理依赖）。"""
+    from .local_scan import is_downloads_dir, pick_root_mod_ids, resolve_folder_path, scan_folder
+
+    try:
+        folder = resolve_folder_path(folder_path, base=config.downloads_dir)
+    except ValueError as exc:
+        return error_json(str(exc))
+    if not folder.is_dir():
+        return error_json(f"文件夹不存在: {folder}")
+
+    if is_downloads_dir(folder, config.downloads_dir) and not mod_ids:
+        return error_json(
+            "为安全起见，禁止对 downloads 缓存目录执行「安装全部」。"
+            "请指定独立子文件夹路径，或在上方填写要安装的模组 ID。",
+            folder=str(folder),
+            is_downloads_dir=True,
+        )
+
+    scan = scan_folder(folder)
+    detected = scan["detected"]
+    if not detected:
+        return error_json(
+            "文件夹内未识别到可安装的模组压缩包",
+            folder=str(folder),
+            unknown=scan["unknown"],
+        )
+
+    detected_ids = {int(item["mod_id"]) for item in detected}
+    if mod_ids:
+        targets = [mid for mid in mod_ids if mid in detected_ids]
+        missing_targets = [mid for mid in mod_ids if mid not in detected_ids]
+    else:
+        targets = pick_root_mod_ids(detected_ids, get_dependency_infos)
+        missing_targets = []
+
+    skipped: list[dict] = []
+    if skip_installed:
+        pending: list[int] = []
+        for mod_id in targets:
+            _status, installed = _mod_status_info(mod_id)
+            if installed:
+                skipped.append({"mod_id": mod_id, "reason": "already_installed"})
+            else:
+                pending.append(mod_id)
+        targets = pending
+
+    if not targets:
+        return json.dumps(
+            {
+                "folder": str(folder),
+                "scan": scan,
+                "targets": [],
+                "missing_targets": missing_targets,
+                "skipped": skipped,
+                "results": [],
+                "succeeded": [],
+                "failed": [],
+                "message": "没有需要安装的模组（均已安装或已跳过）",
+                "local_only": True,
+            },
+            ensure_ascii=False,
+        )
+
+    archive_by_id = {int(item["mod_id"]): Path(item["path"]) for item in detected}
+    register_ids = set(targets)
+    if install_dependencies:
+        for mod_id in list(targets):
+            for dep in missing_dependencies(mod_id):
+                if dep.nexus_mod_id in archive_by_id:
+                    register_ids.add(dep.nexus_mod_id)
+
+    for mod_id in register_ids:
+        archive = archive_by_id.get(mod_id)
+        if archive is None:
+            continue
+        register_local_archive(mod_id, archive)
+        try:
+            await ensure_mod_in_inventory(mod_id)
+        except Exception as exc:
+            logger.warning("ensure_mod_in_inventory(%s) failed: %s", mod_id, exc)
+
+    results: list[dict] = []
+    for mod_id in targets:
+        if install_dependencies:
+            raw = await install_mod_with_dependencies(
+                mod_id,
+                install_dependencies=True,
+                allow_local_fallback=True,
+                local_only=True,
+            )
+        else:
+            raw = await install_mod(
+                mod_id,
+                allow_local_fallback=True,
+                local_only=True,
+            )
+        data = json.loads(raw)
+        data["mod_id"] = mod_id
+        results.append(data)
+
+    succeeded = [
+        r["mod_id"]
+        for r in results
+        if not r.get("error")
+    ]
+    failed = [r for r in results if r.get("error")]
+
+    return json.dumps(
+        {
+            "folder": str(folder),
+            "scan": scan,
+            "targets": targets,
+            "missing_targets": missing_targets,
+            "skipped": skipped,
+            "results": results,
+            "succeeded": succeeded,
+            "failed": failed,
+            "local_only": True,
+        },
+        ensure_ascii=False,
+    )
 
 
 def check_dependencies_report(mod_id: int) -> str:

@@ -24,6 +24,8 @@ TOOL_LABELS = {
     "install_mods_batch": "批量安装模组",
     "install_mod": "下载并安装模组",
     "install_local_mod": "本地压缩包安装",
+    "scan_local_folder_tool": "扫描本地文件夹",
+    "install_local_folder": "文件夹批量本地安装",
     "uninstall_mod": "卸载模组",
     "list_mods": "列出库存模组",
     "get_uninstall_plan_tool": "查看卸载计划",

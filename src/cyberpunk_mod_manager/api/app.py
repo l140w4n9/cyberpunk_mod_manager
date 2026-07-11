@@ -15,10 +15,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from ..config import config
+from ..config import ConfigError, config
 from ..storage.db import init_db
 from .routes_mods import router as mods_router
 from .routes_agent import router as agent_router
+from .routes_config import router as config_router
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -26,13 +27,18 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时确保数据目录存在并初始化数据库。"""
-    config.ensure_dirs()
-    init_db()
+    if config.has_data_dir:
+        try:
+            config.ensure_dirs()
+            init_db()
+        except ConfigError:
+            pass
     yield
 
 
 app = FastAPI(title="Cyberpunk 2077 Mod Manager", lifespan=lifespan)
 
+app.include_router(config_router, prefix="/api/config", tags=["config"])
 app.include_router(mods_router, prefix="/api/mods", tags=["mods"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 
@@ -52,7 +58,8 @@ async def health() -> dict:
     return {
         "status": "ok",
         "game_path": config.game_path,
-        "data_dir": str(config.data_dir),
+        "data_dir": str(config.data_dir) if config.has_data_dir else "",
+        "data_dir_configured": config.has_data_dir,
         "config_file": config.config_file,
         "nexus_configured": bool(config.nexus_api_key),
         "nexus_valid": nexus_valid,

@@ -1,8 +1,26 @@
+function formatNetworkError(error) {
+  if (error?.name === 'AbortError') {
+    return '请求已取消'
+  }
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8000'
+  return `无法连接后端服务（${origin}），请确认已运行 python -m cyberpunk_mod_manager 并保持窗口打开`
+}
+
 async function request(url, options = {}) {
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
-  })
+  let resp
+  try {
+    resp = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      ...options,
+    })
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw error
+    }
+    const message = error?.message === 'Failed to fetch' ? formatNetworkError(error) : (error?.message || formatNetworkError(error))
+    throw new Error(message)
+  }
+
   const data = await resp.json().catch(() => ({}))
   if (!resp.ok) {
     let message = data.detail || data.error || `HTTP ${resp.status}`
@@ -12,6 +30,10 @@ async function request(url, options = {}) {
     throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
   }
   return data
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function parseSseChunk(buffer) {
@@ -38,11 +60,17 @@ function parseSseChunk(buffer) {
 }
 
 export async function chatStream(message, onEvent, sessionId = null) {
-  const resp = await fetch('/api/agent/chat/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
-  })
+  let resp
+  try {
+    resp = await fetch('/api/agent/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id: sessionId }),
+    })
+  } catch (error) {
+    const messageText = error?.message === 'Failed to fetch' ? formatNetworkError(error) : (error?.message || formatNetworkError(error))
+    throw new Error(messageText)
+  }
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}))
     const msg = data.detail || data.error || `HTTP ${resp.status}`
@@ -91,6 +119,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mod_id: modId, archive_name: archiveName }),
     }),
+  scanLocalFolder: (folderPath) =>
+    request('/api/mods/scan-local', {
+      method: 'POST',
+      body: JSON.stringify({ folder_path: folderPath }),
+    }),
+  installLocalFolder: (folderPath, modIds = null) =>
+    request('/api/mods/install-local-folder', {
+      method: 'POST',
+      body: JSON.stringify({
+        folder_path: folderPath,
+        mod_ids: modIds,
+        install_dependencies: true,
+      }),
+    }),
   modDependencies: (modId) => request(`/api/mods/${modId}/dependencies`),
   uninstallCheck: (modId) => request(`/api/mods/${modId}/uninstall-check`),
   uninstallMod: (modId, force = false) =>
@@ -101,6 +143,24 @@ export const api = {
   uninstallPlan: (modId) => request(`/api/mods/${modId}/uninstall-plan`),
   modSummary: (modId, refresh = false) =>
     request(`/api/mods/${modId}/summary?refresh=${refresh}`),
+  getConfig: async (retries = 2) => {
+    let lastError
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        return await request('/api/config')
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error
+        lastError = error
+        if (attempt < retries) await sleep(400 * (attempt + 1))
+      }
+    }
+    throw lastError
+  },
+  saveConfig: (payload) =>
+    request('/api/config', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   chat: (message, sessionId = null) =>
     request('/api/agent/chat', {
       method: 'POST',

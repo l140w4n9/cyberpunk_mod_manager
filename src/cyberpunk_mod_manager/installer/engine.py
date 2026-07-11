@@ -94,7 +94,7 @@ class Installer:
                     created_dirs_set.add(dir_rel)
                     # 备份被覆盖的原文件
                     if target_abs.exists():
-                        backup_dir = config.data_dir / "backups" / str(mod_id)
+                        backup_dir = config.data_dir_path / "backups" / str(mod_id)
                         backup_dir.mkdir(parents=True, exist_ok=True)
                         # 保留完整相对路径作为备份名，避免不同子目录下同名文件互相覆盖
                         safe_name = target_rel.replace("/", "__")
@@ -103,7 +103,7 @@ class Installer:
                         result.backed_up_files.append(
                             {
                                 "path": target_rel,
-                                "backup": str(backup_path.relative_to(config.data_dir)),
+                                "backup": str(backup_path.relative_to(config.data_dir_path)),
                             }
                         )
                     # 复制文件
@@ -128,7 +128,7 @@ class Installer:
                         pass
             for item in result.backed_up_files:
                 target_abs = self.game_path / item["path"]
-                backup_abs = config.data_dir / item["backup"]
+                backup_abs = config.data_dir_path / item["backup"]
                 if backup_abs.exists():
                     try:
                         shutil.copy2(backup_abs, target_abs)
@@ -158,7 +158,7 @@ class Installer:
 
         # 1. 删除前先确认所有备份文件都存在，避免删了原文件却无法恢复
         for item in backed_up_files:
-            backup_abs = config.data_dir / item["backup"]
+            backup_abs = config.data_dir_path / item["backup"]
             if not backup_abs.exists():
                 raise RuntimeError(
                     f"Backup file missing, cannot safely uninstall: {item['backup']}"
@@ -174,7 +174,7 @@ class Installer:
         # 3. 恢复备份文件
         for item in backed_up_files:
             target_abs = self.game_path / item["path"]
-            backup_abs = config.data_dir / item["backup"]
+            backup_abs = config.data_dir_path / item["backup"]
             if backup_abs.exists():
                 target_abs.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(backup_abs, target_abs)

@@ -11,6 +11,7 @@ const props = defineProps({
 defineEmits(['navigate', 'refresh'])
 
 const pendingCount = computed(() => filterMods(props.mods, 'pending').length)
+const installedCount = computed(() => filterMods(props.mods, 'installed').length)
 const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').length)
 </script>
 
@@ -42,6 +43,7 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
       >
         <span class="nav-icon">▣</span>
         已安装
+        <span v-if="installedCount" class="nav-badge ok">{{ installedCount }}</span>
       </button>
       <button
         class="nav-item"
@@ -61,14 +63,27 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         依赖不全
         <span v-if="incompleteCount" class="nav-badge danger">{{ incompleteCount }}</span>
       </button>
+
+      <div class="nav-group-label">系统</div>
+      <button
+        class="nav-item"
+        :class="{ active: active === 'settings' }"
+        @click="$emit('navigate', 'settings')"
+      >
+        <span class="nav-icon">⚙</span>
+        设置
+      </button>
+      <button class="nav-item nav-item-muted" @click="$emit('refresh')">
+        <span class="nav-icon">↻</span>
+        刷新数据
+      </button>
     </nav>
 
     <div class="sidebar-footer">
       <div class="health" :class="{ ok: health.ready }">
         <span class="health-dot" />
-        {{ health.label }}
+        <span class="health-text">{{ health.label }}</span>
       </div>
-      <button class="btn-ghost btn-sm full" @click="$emit('refresh')">刷新数据</button>
     </div>
   </aside>
 </template>
@@ -163,9 +178,19 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
   background: rgba(255, 176, 32, 0.15);
   color: var(--warn);
 }
+.nav-badge.ok {
+  background: rgba(46, 230, 166, 0.12);
+  color: var(--ok);
+}
 .nav-badge.danger {
   background: rgba(255, 77, 109, 0.15);
   color: var(--danger);
+}
+.nav-item-muted {
+  color: var(--muted);
+}
+.nav-item-muted:hover {
+  color: var(--text);
 }
 .sidebar-footer {
   padding: 14px 12px;
@@ -177,9 +202,12 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
   gap: 8px;
   font-size: 11px;
   color: var(--danger);
-  margin-bottom: 10px;
 }
 .health.ok { color: var(--ok); }
+.health-text {
+  line-height: 1.4;
+  word-break: break-word;
+}
 .health-dot {
   width: 6px;
   height: 6px;
@@ -213,6 +241,5 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
     padding: 8px 12px;
   }
   .health { margin-bottom: 0; }
-  .full { width: auto; }
 }
 </style>

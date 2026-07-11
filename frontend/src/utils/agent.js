@@ -39,7 +39,8 @@ export function summarizeToolResult(result) {
     if (data.error) return `错误: ${data.error}`
     if (data.added_files_count != null) return `新增 ${data.added_files_count} 个文件`
     if (data.name) return data.name
-    if (data.missing_count != null) return `缺失依赖 ${data.missing_count}`
+    if (data.detected_count != null) return `识别 ${data.detected_count} 个模组`
+    if (Array.isArray(data.succeeded)) return `安装成功 ${data.succeeded.length} 个`
     return '完成'
   } catch {
     return result.slice(0, 80)

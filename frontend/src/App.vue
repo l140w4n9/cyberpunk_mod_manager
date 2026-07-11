@@ -4,6 +4,7 @@ import { api } from './api/client'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import AgentWorkspace from './views/AgentWorkspace.vue'
 import ModsWorkspace from './views/ModsWorkspace.vue'
+import SettingsWorkspace from './views/SettingsWorkspace.vue'
 import UninstallDialog from './components/UninstallDialog.vue'
 
 const activeView = ref('agent')
@@ -27,23 +28,29 @@ function setStatus(message, type = '') {
 async function checkHealth() {
   try {
     const data = await api.health()
-    const ready = data.nexus_valid && data.llm_configured
+    const ready = data.data_dir_configured && data.nexus_valid && data.llm_configured
     let label = '系统就绪'
-    if (!data.llm_configured) label = 'LLM 未配置'
+    if (!data.data_dir_configured) label = '数据目录未配置'
+    else if (!data.llm_configured) label = 'LLM 未配置'
     else if (!data.nexus_configured) label = 'Nexus Key 未配置'
     else if (!data.nexus_valid) label = 'Nexus Key 无效'
     health.value = {
       ready,
       label,
       llm_configured: data.llm_configured,
+      data_dir_configured: data.data_dir_configured,
       config_file: data.config_file || '',
     }
   } catch {
-    health.value = { ready: false, label: '连接失败', llm_configured: false, config_file: '' }
+    health.value = { ready: false, label: '连接失败', llm_configured: false, data_dir_configured: false, config_file: '' }
   }
 }
 
 async function loadMods() {
+  if (!health.value.data_dir_configured) {
+    mods.value = []
+    return
+  }
   loading.value = true
   try {
     mods.value = await api.listMods(false)
@@ -74,7 +81,11 @@ async function handleInstall(modId) {
   setStatus(`正在安装模组 ${modId}...`, 'info')
   try {
     const data = await api.installMod(modId)
-    setStatus(`✓ ${data.name || modId} 安装完成`, 'ok')
+    if (data.skipped) {
+      setStatus(data.message || `模组 ${modId} 已安装，已跳过`, 'info')
+    } else {
+      setStatus(`✓ ${data.name || modId} 安装完成`, 'ok')
+    }
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -88,12 +99,16 @@ async function handleInstallWithDeps(modId) {
   setStatus(`正在安装模组 ${modId} 及依赖...`, 'info')
   try {
     const data = await api.installModWithDeps(modId)
-    const depsFail = (data.dependencies_failed || []).length
-    setStatus(
-      `✓ 安装完成，新增 ${data.added_files_count} 文件` +
-        (depsFail ? `，${depsFail} 个依赖失败` : ''),
-      depsFail ? 'err' : 'ok',
-    )
+    if (data.skipped) {
+      setStatus(data.message || `模组 ${modId} 已安装，已跳过`, 'info')
+    } else {
+      const depsFail = (data.dependencies_failed || []).length
+      setStatus(
+        `✓ 安装完成，新增 ${data.added_files_count || 0} 文件` +
+          (depsFail ? `，${depsFail} 个依赖失败` : ''),
+        depsFail ? 'err' : 'ok',
+      )
+    }
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -108,6 +123,36 @@ async function handleInstallLocal({ modId, archiveName }) {
   try {
     const data = await api.installLocalMod(modId, archiveName)
     setStatus(`✓ 本地安装完成，${data.added_files_count} 文件`, 'ok')
+    await loadMods()
+  } catch (e) {
+    setStatus('✕ ' + e.message, 'err')
+  } finally {
+    installing.value = false
+  }
+}
+
+async function handleScanLocalFolder(folderPath, callback) {
+  try {
+    callback(await api.scanLocalFolder(folderPath))
+  } catch (e) {
+    setStatus('扫描失败: ' + e.message, 'err')
+    callback(null)
+  }
+}
+
+async function handleInstallLocalFolder({ folderPath, modIds }) {
+  installing.value = true
+  setStatus(`正在从文件夹安装...`, 'info')
+  try {
+    const data = await api.installLocalFolder(folderPath, modIds)
+    const failed = (data.failed || []).length
+    const ok = (data.succeeded || []).length
+    const skipped = (data.skipped || []).length
+    const msg = data.message
+      || `文件夹安装完成：新装 ${ok} 个` +
+        (skipped ? `，跳过 ${skipped} 个已安装` : '') +
+        (failed ? `，${failed} 个失败` : '')
+    setStatus(`✓ ${msg}`, failed ? 'err' : 'ok')
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -158,6 +203,10 @@ function cancelUninstall() {
   uninstallDialog.value = { visible: false, report: null, modId: null }
 }
 
+function onConfigSaved() {
+  checkHealth().then(() => loadMods())
+}
+
 onMounted(async () => {
   try {
     const saved = localStorage.getItem('cpmm_active_view')
@@ -165,7 +214,11 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
-  await Promise.all([checkHealth(), loadMods()])
+  await checkHealth()
+  if (!health.value.data_dir_configured) {
+    activeView.value = 'settings'
+  }
+  await loadMods()
 })
 </script>
 
@@ -181,6 +234,10 @@ onMounted(async () => {
 
     <main class="main-content">
       <AgentWorkspace v-if="activeView === 'agent'" :health="health" @done="loadMods" />
+      <SettingsWorkspace
+        v-else-if="activeView === 'settings'"
+        @saved="onConfigSaved"
+      />
       <ModsWorkspace
         v-else-if="MODS_FILTER[activeView]"
         :mods="mods"
@@ -191,6 +248,8 @@ onMounted(async () => {
         @install="handleInstall"
         @install-with-deps="handleInstallWithDeps"
         @install-local="handleInstallLocal"
+        @scan-local-folder="handleScanLocalFolder"
+        @install-local-folder="handleInstallLocalFolder"
         @check-deps="handleCheckDeps"
         @uninstall="handleUninstall"
       />

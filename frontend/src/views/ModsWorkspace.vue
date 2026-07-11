@@ -17,12 +17,17 @@ const emit = defineEmits([
   'install',
   'install-with-deps',
   'install-local',
+  'install-local-folder',
+  'scan-local-folder',
   'uninstall',
   'check-deps',
 ])
 
 const modIdInput = ref('')
 const archiveNameInput = ref('')
+const folderPathInput = ref('')
+const folderScan = ref(null)
+const scanningFolder = ref(false)
 const depsReport = ref(null)
 const checkingDeps = ref(false)
 
@@ -69,6 +74,43 @@ function checkDeps() {
     depsReport.value = report
     checkingDeps.value = false
   })
+}
+
+function scanFolder() {
+  const folder = folderPathInput.value.trim()
+  if (!folder) return
+  scanningFolder.value = true
+  folderScan.value = null
+  emit('scan-local-folder', folder, (result) => {
+    folderScan.value = result
+    scanningFolder.value = false
+  })
+}
+
+function installFromFolder() {
+  const folder = folderPathInput.value.trim()
+  if (!folder) return
+  const id = modIdInput.value.trim()
+  const modIds = id ? [parseInt(id, 10)] : null
+
+  if (folderScan.value?.is_downloads_dir && !modIds) {
+    window.alert(
+      '不能对 downloads 缓存目录执行「安装全部」。\n请填写要安装的模组 ID，或使用独立子文件夹。',
+    )
+    return
+  }
+
+  const pending = folderScan.value?.pending_count
+  if (!modIds && pending != null && pending > 0) {
+    const skip = folderScan.value?.installed_count || 0
+    const msg =
+      `将安装 ${pending} 个未安装模组` +
+      (skip ? `，${skip} 个已安装将自动跳过` : '') +
+      '。继续？'
+    if (!window.confirm(msg)) return
+  }
+
+  emit('install-local-folder', { folderPath: folder, modIds })
 }
 </script>
 
@@ -118,6 +160,51 @@ function checkDeps() {
         </span>
         <DepChipList :dependencies="depsReport.dependencies" />
       </div>
+
+      <div class="folder-section">
+        <div class="section-divider">文件夹批量安装</div>
+        <div class="input-wrap">
+          <label>本地文件夹</label>
+          <input
+            v-model="folderPathInput"
+            type="text"
+            placeholder="例如 D:\Mods\batch1（勿填 downloads 做批量安装）"
+          />
+          <p class="input-hint">
+            请使用独立子文件夹；已安装模组会自动跳过。查看状态请点「扫描文件夹」。
+          </p>
+        </div>
+        <div class="btn-row">
+          <button class="btn-ghost" :disabled="scanningFolder || !folderPathInput.trim()" @click="scanFolder">
+            {{ scanningFolder ? '扫描中...' : '扫描文件夹' }}
+          </button>
+          <button
+            class="btn-primary"
+            :disabled="installing || !folderPathInput.trim()"
+            @click="installFromFolder"
+          >
+            {{ installing ? '安装中...' : modIdInput.trim() ? '文件夹安装指定模组' : '文件夹安装全部' }}
+          </button>
+        </div>
+        <div v-if="folderScan" class="scan-result">
+          <span class="scan-summary">
+            识别 {{ folderScan.detected_count }} 个 ·
+            <span class="ok-text">已安装 {{ folderScan.installed_count || 0 }}</span> ·
+            <span class="pending-text">待安装 {{ folderScan.pending_count || 0 }}</span>
+            <template v-if="folderScan.is_downloads_dir"> · downloads 目录</template>
+          </span>
+          <div v-if="folderScan.detected?.length" class="chip-row mono">
+            <span
+              v-for="item in folderScan.detected"
+              :key="item.mod_id"
+              class="chip"
+              :class="item.installed ? 'installed' : 'pending'"
+            >
+              #{{ item.mod_id }}
+            </span>
+          </div>
+        </div>
+      </div>
     </section>
 
     <div v-if="loading" class="empty-state"><span class="spinner" /> 加载中...</div>
@@ -128,7 +215,10 @@ function checkDeps() {
         v-for="mod in filteredMods"
         :key="mod.id"
         :mod="mod"
+        :filter-mode="filterMode"
         :show-warning="filterMode === 'incomplete'"
+        :installing="installing"
+        @install="$emit('install', $event)"
         @uninstall="$emit('uninstall', $event)"
         @install-with-deps="$emit('install-with-deps', $event)"
       />
@@ -182,6 +272,47 @@ function checkDeps() {
 }
 .deps-report .ok { color: var(--ok); font-size: 13px; font-weight: 600; }
 .deps-report .warn { color: var(--warn); font-size: 13px; font-weight: 600; }
+.folder-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.section-divider {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent2);
+  margin-bottom: 12px;
+}
+.input-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.scan-result { margin-top: 12px; }
+.scan-summary { font-size: 12px; color: var(--muted); }
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chip {
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+}
+.chip.installed {
+  border-color: rgba(46, 230, 166, 0.3);
+  color: var(--ok);
+}
+.chip.pending {
+  border-color: rgba(255, 176, 32, 0.35);
+  color: var(--warn);
+}
+.ok-text { color: var(--ok); }
+.pending-text { color: var(--warn); }
 
 .empty-state {
   text-align: center;
