@@ -63,6 +63,14 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         依赖不全
         <span v-if="incompleteCount" class="nav-badge danger">{{ incompleteCount }}</span>
       </button>
+      <button
+        class="nav-item"
+        :class="{ active: active === 'collections' }"
+        @click="$emit('navigate', 'collections')"
+      >
+        <span class="nav-icon">♥</span>
+        收藏安装
+      </button>
 
       <div class="nav-group-label">系统</div>
       <button

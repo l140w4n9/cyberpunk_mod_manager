@@ -12,7 +12,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import ConfigError, config
@@ -20,6 +21,7 @@ from ..storage.db import init_db
 from .routes_mods import router as mods_router
 from .routes_agent import router as agent_router
 from .routes_config import router as config_router
+from .routes_collections import router as collections_router
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -39,6 +41,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Cyberpunk 2077 Mod Manager", lifespan=lifespan)
 
 app.include_router(config_router, prefix="/api/config", tags=["config"])
+app.include_router(collections_router, prefix="/api/collections", tags=["collections"])
 app.include_router(mods_router, prefix="/api/mods", tags=["mods"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 
@@ -67,9 +70,24 @@ async def health() -> dict:
     }
 
 
-# 静态前端页面
-app.mount(
-    "/",
-    StaticFiles(directory=str(WEB_DIR), html=True),
-    name="web",
-)
+# 静态前端：/assets 资源 + SPA 回退（刷新子路径仍返回 index.html）
+assets_dir = WEB_DIR / "assets"
+if assets_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+
+@app.get("/")
+async def serve_index() -> FileResponse:
+    return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str) -> FileResponse:
+    if full_path.startswith("api/"):
+        raise HTTPException(404)
+    if full_path.startswith("assets/"):
+        raise HTTPException(404)
+    candidate = WEB_DIR / full_path
+    if candidate.is_file():
+        return FileResponse(candidate)
+    return FileResponse(WEB_DIR / "index.html")

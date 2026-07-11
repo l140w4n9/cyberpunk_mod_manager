@@ -81,8 +81,33 @@ def _parse_api_error(response: httpx.Response) -> NexusAPIError:
     )
 
 
+def _is_main_file(mod_file: ModFile) -> bool:
+    """是否为 Nexus 当前可下载的主文件分类。"""
+    name = (mod_file.category_name or "").strip().upper()
+    if name == "MAIN":
+        return True
+    # category_id 1 在 CP2077 API 中对应 MAIN
+    return mod_file.category_id == 1
+
+
+def select_download_file(files: list[ModFile]) -> ModFile | None:
+    """从文件列表中选出应下载的文件（优先最新 MAIN，避免旧版归档）。"""
+    if not files:
+        return None
+    for mod_file in files:
+        if mod_file.is_primary:
+            return mod_file
+
+    main_files = [f for f in files if _is_main_file(f)]
+    pool = main_files or list(files)
+
+    def sort_key(mod_file: ModFile) -> tuple[int, int]:
+        return (mod_file.uploaded_timestamp or 0, mod_file.file_id)
+
+    return max(pool, key=sort_key)
+
+
 def _pick_download_link(links: list[DownloadLink]) -> DownloadLink:
-    """优先选择 Nexus CDN 下载链接。"""
     if not links:
         raise NexusAPIError("Nexus API 未返回可用下载链接")
     for link in links:
@@ -171,14 +196,9 @@ class NexusClient:
         return parsed.files
 
     async def pick_primary_file(self, mod_id: int) -> Optional[ModFile]:
-        """选择主文件（优先 is_primary，否则取第一个文件）。"""
+        """选择应下载的文件（优先 is_primary，否则最新 MAIN 分类）。"""
         files = await self.get_mod_files(mod_id)
-        if not files:
-            return None
-        for f in files:
-            if f.is_primary:
-                return f
-        return files[0]
+        return select_download_file(files)
 
     async def get_download_links(
         self, mod_id: int, file_id: int

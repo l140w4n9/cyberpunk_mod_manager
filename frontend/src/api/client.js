@@ -143,6 +143,19 @@ export const api = {
   uninstallPlan: (modId) => request(`/api/mods/${modId}/uninstall-plan`),
   modSummary: (modId, refresh = false) =>
     request(`/api/mods/${modId}/summary?refresh=${refresh}`),
+  parseCollection: (url) =>
+    request('/api/collections/parse', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+  installCollection: (payload) =>
+    request('/api/collections/install', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getCollectionJob: (jobId) => request(`/api/collections/jobs/${jobId}`),
+  cancelCollectionJob: (jobId) =>
+    request(`/api/collections/jobs/${jobId}/cancel`, { method: 'POST' }),
   getConfig: async (retries = 2) => {
     let lastError
     for (let attempt = 0; attempt <= retries; attempt += 1) {

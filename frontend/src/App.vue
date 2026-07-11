@@ -1,13 +1,15 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from './api/client'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import AgentWorkspace from './views/AgentWorkspace.vue'
 import ModsWorkspace from './views/ModsWorkspace.vue'
 import SettingsWorkspace from './views/SettingsWorkspace.vue'
+import CollectionWorkspace from './views/CollectionWorkspace.vue'
 import UninstallDialog from './components/UninstallDialog.vue'
+import { installHashListener, readSavedView, writeView } from './utils/navigation'
 
-const activeView = ref('agent')
+const activeView = ref(readSavedView())
 const mods = ref([])
 const loading = ref(false)
 const installing = ref(false)
@@ -39,10 +41,20 @@ async function checkHealth() {
       label,
       llm_configured: data.llm_configured,
       data_dir_configured: data.data_dir_configured,
+      nexus_configured: data.nexus_configured,
+      nexus_valid: data.nexus_valid,
       config_file: data.config_file || '',
     }
   } catch {
-    health.value = { ready: false, label: '连接失败', llm_configured: false, data_dir_configured: false, config_file: '' }
+    health.value = {
+      ready: false,
+      label: '连接失败',
+      llm_configured: false,
+      data_dir_configured: false,
+      nexus_configured: false,
+      nexus_valid: false,
+      config_file: '',
+    }
   }
 }
 
@@ -63,11 +75,7 @@ async function loadMods() {
 
 function navigate(view) {
   activeView.value = view
-  try {
-    localStorage.setItem('cpmm_active_view', view)
-  } catch {
-    /* ignore */
-  }
+  writeView(view)
 }
 
 const MODS_FILTER = {
@@ -207,18 +215,23 @@ function onConfigSaved() {
   checkHealth().then(() => loadMods())
 }
 
+let removeHashListener = null
+
 onMounted(async () => {
-  try {
-    const saved = localStorage.getItem('cpmm_active_view')
-    if (saved) activeView.value = saved
-  } catch {
-    /* ignore */
-  }
+  writeView(activeView.value)
+  removeHashListener = installHashListener((view) => {
+    activeView.value = view
+  })
   await checkHealth()
-  if (!health.value.data_dir_configured) {
+  if (!health.value.data_dir_configured && activeView.value === 'agent') {
     activeView.value = 'settings'
+    writeView('settings')
   }
   await loadMods()
+})
+
+onUnmounted(() => {
+  if (removeHashListener) removeHashListener()
 })
 </script>
 
@@ -253,6 +266,18 @@ onMounted(async () => {
         @check-deps="handleCheckDeps"
         @uninstall="handleUninstall"
       />
+      <CollectionWorkspace
+        v-else-if="activeView === 'collections'"
+        :health="health"
+        :installing="installing"
+        @install-started="installing = true"
+        @install-finished="installing = false"
+        @refresh-mods="loadMods"
+      />
+      <div v-else class="empty-fallback panel">
+        <p>页面不存在，请从侧栏重新选择。</p>
+        <button class="btn-primary" @click="navigate('agent')">返回 Agent</button>
+      </div>
     </main>
 
     <UninstallDialog
@@ -276,6 +301,12 @@ onMounted(async () => {
   margin-left: var(--sidebar-width);
   min-width: 0;
   min-height: 100vh;
+}
+.empty-fallback {
+  margin: 24px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
 }
 
 @media (max-width: 900px) {

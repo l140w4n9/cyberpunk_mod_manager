@@ -14,8 +14,10 @@ class ModFile(BaseModel):
     description: Optional[str] = None
     version: Optional[str] = None
     category_name: Optional[str] = None
+    category_id: Optional[int] = None
     size: Optional[int] = None
     is_primary: bool = False
+    uploaded_timestamp: Optional[int] = None
 
 
 class ModFilesResponse(BaseModel):
