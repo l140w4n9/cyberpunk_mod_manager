@@ -102,6 +102,36 @@ def test_reinstall_replaces_install_record(tmp_path: Path) -> None:
     assert "archive/pc/mod/a.archive" not in plan.added_files
 
 
+def test_install_preserves_red4ext_plugin_structure(tmp_path: Path) -> None:
+    mod_id = _create_mod(nexus_mod_id=4198)
+    archive = tmp_path / "archivexl.zip"
+    dll = "red4ext/plugins/ArchiveXL/ArchiveXL.dll"
+    xl = "red4ext/plugins/ArchiveXL/Bundle/Migration.xl"
+    _make_zip(archive, {dll: b"dll", xl: b"xl"})
+
+    installer = Installer()
+    result = installer.install(mod_id, archive)
+
+    assert dll in result.added_files
+    assert xl in result.added_files
+    assert (Path(config.game_path) / dll).exists()
+    assert (Path(config.game_path) / xl).exists()
+
+
+def test_install_fails_when_no_rules_match(tmp_path: Path) -> None:
+    mod_id = _create_mod(nexus_mod_id=55555)
+    archive = tmp_path / "readme_only.zip"
+    _make_zip(archive, {"readme.txt": b"no rules"})
+
+    installer = Installer()
+    with pytest.raises(ValueError, match="没有可安装的文件"):
+        installer.install(mod_id, archive)
+
+    with get_session() as session:
+        mod = session.exec(select(Mod).where(Mod.id == mod_id)).first()
+        assert mod.status != ModStatus.INSTALLED
+
+
 def test_backup_and_restore_on_overwrite(tmp_path: Path) -> None:
     mod_id = _create_mod(nexus_mod_id=77777)
     game_file = Path(config.game_path) / "archive/pc/mod/existing.archive"

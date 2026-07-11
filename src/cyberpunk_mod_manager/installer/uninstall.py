@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from sqlmodel import select
@@ -22,6 +22,8 @@ class UninstallPlan:
     backed_up_files: list[dict]
     installed_at: Optional[str] = None
     source_file: str = ""
+    plan_source: str = ""
+    plan_items: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -44,4 +46,6 @@ def get_uninstall_plan(mod_id: int) -> Optional[UninstallPlan]:
             backed_up_files=json.loads(record.backed_up_files),
             installed_at=str(record.installed_at),
             source_file=record.source_file,
+            plan_source=record.plan_source or "",
+            plan_items=json.loads(record.plan_json or "[]"),
         )

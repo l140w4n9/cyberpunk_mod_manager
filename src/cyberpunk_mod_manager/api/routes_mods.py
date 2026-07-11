@@ -16,6 +16,7 @@ from ..config import config
 from ..installer import Installer, get_uninstall_plan
 from ..models import Mod
 from ..services import audit_ops, discovery, health_audit, mod_ops
+from ..services.install_plan import build_install_plan
 from ..services.summary import display_summary, ensure_mod_summary
 from ..storage.db import get_session
 
@@ -350,7 +351,27 @@ async def install_local_mod(req: LocalInstallRequest) -> dict:
     path = Path(req.archive_name)
     archive_path = path if path.is_absolute() else config.downloads_dir / req.archive_name
     await mod_ops.ensure_mod_in_inventory(req.mod_id)
-    return _parse_result(mod_ops.install_from_archive(req.mod_id, archive_path))
+    return _parse_result(await mod_ops.install_from_archive(req.mod_id, archive_path))
+
+
+@router.post("/preview-install-plan")
+async def preview_install_plan(req: LocalInstallRequest) -> dict:
+    """检查压缩包结构并生成安装计划（不执行安装）。"""
+    _ensure_data_dir()
+    path = Path(req.archive_name)
+    archive_path = path if path.is_absolute() else config.downloads_dir / req.archive_name
+    await mod_ops.ensure_mod_in_inventory(req.mod_id)
+    with get_session() as session:
+        mod = session.exec(select(Mod).where(Mod.nexus_mod_id == req.mod_id)).first()
+        name = mod.name if mod else ""
+        description = mod.description if mod else ""
+    plan = await build_install_plan(
+        req.mod_id,
+        archive_path,
+        mod_name=name or "",
+        description=description or "",
+    )
+    return plan
 
 
 @router.post("/scan-local")

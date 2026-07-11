@@ -67,12 +67,29 @@ def _migrate_columns() -> None:
                 conn.commit()
 
 
+def _migrate_install_record_columns() -> None:
+    with get_engine().connect() as conn:
+        rows = conn.exec_driver_sql("PRAGMA table_info(install_records)").fetchall()
+        columns = {row[1] for row in rows}
+        if "plan_source" not in columns:
+            conn.exec_driver_sql(
+                "ALTER TABLE install_records ADD COLUMN plan_source VARCHAR DEFAULT ''"
+            )
+            conn.commit()
+        if "plan_json" not in columns:
+            conn.exec_driver_sql(
+                "ALTER TABLE install_records ADD COLUMN plan_json VARCHAR DEFAULT '[]'"
+            )
+            conn.commit()
+
+
 def init_db() -> None:
     """创建所有表并执行轻量迁移。"""
     if not config.has_data_dir:
         return
     SQLModel.metadata.create_all(get_engine())
     _migrate_columns()
+    _migrate_install_record_columns()
 
 
 @contextmanager

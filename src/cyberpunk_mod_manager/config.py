@@ -173,6 +173,8 @@ class AppConfig(BaseModel):
     openai_base_url: str = "https://api.openai.com/v1"
     # 应用名称，用于 Nexus API 请求头
     app_name: str = "CyberpunkModManager"
+    # 是否允许通过 Nexus API 自动下载成人内容模组（默认关闭）
+    allow_adult_content: bool = False
     # 已加载的配置文件路径（便于调试）
     config_file: str = ""
 
@@ -223,6 +225,7 @@ class AppConfig(BaseModel):
             "openai_api_key": self.openai_api_key,
             "model_name": self.model_name,
             "openai_base_url": self.openai_base_url,
+            "allow_adult_content": self.allow_adult_content,
             "config_file": self.config_file,
             "has_data_dir": self.has_data_dir,
             "downloads_dir": str(self.downloads_dir) if self.has_data_dir else "",
@@ -277,6 +280,7 @@ def save_config(values: dict[str, Any]) -> Path:
         or "gpt-4o-mini",
         "openai_base_url": str(values.get("openai_base_url", "https://api.openai.com/v1")).strip()
         or "https://api.openai.com/v1",
+        "allow_adult_content": bool(values.get("allow_adult_content", False)),
     }
 
     path = resolve_config_write_path(config.config_file)

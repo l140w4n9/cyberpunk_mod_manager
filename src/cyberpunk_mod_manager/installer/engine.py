@@ -51,7 +51,28 @@ class Installer:
     def __init__(self, game_path: str | None = None) -> None:
         self.game_path = Path(game_path or config.game_path)
 
-    def install(self, mod_id: int, archive_path: Path) -> InstallResult:
+    def _resolve_target(
+        self,
+        rel_to_extract: str,
+        file_mappings: dict[str, str] | None,
+    ) -> str | None:
+        rel = rel_to_extract.replace("\\", "/")
+        if file_mappings is not None and rel in file_mappings:
+            return file_mappings[rel]
+        rule = match_rule(rel)
+        if rule is None:
+            return None
+        return resolve_target(rel, rule)
+
+    def install(
+        self,
+        mod_id: int,
+        archive_path: Path,
+        *,
+        file_mappings: dict[str, str] | None = None,
+        plan_source: str = "",
+        plan_items: list[dict] | None = None,
+    ) -> InstallResult:
         """安装指定模组的压缩包，返回安装结果（含卸载计划）。"""
         if not archive_path.exists():
             raise FileNotFoundError(f"Archive not found: {archive_path}")
@@ -77,11 +98,16 @@ class Installer:
                 for fname in files:
                     src = root_path / fname
                     rel_to_extract = src.relative_to(tmp_dir).as_posix()
-                    rule = match_rule(rel_to_extract)
-                    if rule is None:
-                        result.skipped.append(rel_to_extract)
-                        continue
-                    target_rel = resolve_target(rel_to_extract, rule)
+                    if file_mappings is not None:
+                        if rel_to_extract not in file_mappings:
+                            result.skipped.append(rel_to_extract)
+                            continue
+                        target_rel = file_mappings[rel_to_extract]
+                    else:
+                        target_rel = self._resolve_target(rel_to_extract, None)
+                        if target_rel is None:
+                            result.skipped.append(rel_to_extract)
+                            continue
                     target_abs = self.game_path / target_rel
                     # 防止路径穿越（zip-slip）：解析后不得逃出游戏目录
                     if not target_abs.resolve().is_relative_to(game_root):
@@ -113,8 +139,23 @@ class Installer:
 
             result.created_dirs = sorted(created_dirs_set)
 
+            if not result.added_files:
+                skipped_preview = ", ".join(result.skipped[:5])
+                suffix = "…" if len(result.skipped) > 5 else ""
+                raise ValueError(
+                    "压缩包内没有可安装的文件（安装规则未匹配）。"
+                    f"跳过 {len(result.skipped)} 个文件"
+                    + (f"，例如：{skipped_preview}{suffix}" if skipped_preview else "")
+                )
+
             # 持久化卸载计划
-            self._save_record(mod_id, result, archive_path)
+            self._save_record(
+                mod_id,
+                result,
+                archive_path,
+                plan_source=plan_source,
+                plan_items=plan_items or [],
+            )
             # 更新模组状态
             self._update_mod_status(mod_id, ModStatus.INSTALLED)
         except Exception:
@@ -198,7 +239,13 @@ class Installer:
         return result
 
     def _save_record(
-        self, mod_id: int, result: InstallResult, archive_path: Path
+        self,
+        mod_id: int,
+        result: InstallResult,
+        archive_path: Path,
+        *,
+        plan_source: str = "",
+        plan_items: list[dict] | None = None,
     ) -> None:
         record = InstallRecord(
             mod_id=mod_id,
@@ -207,6 +254,8 @@ class Installer:
             backed_up_files=json.dumps(result.backed_up_files, ensure_ascii=False),
             config_writes="[]",
             source_file=str(archive_path),
+            plan_source=plan_source,
+            plan_json=json.dumps(plan_items or [], ensure_ascii=False),
         )
         with get_session() as session:
             for old in session.exec(

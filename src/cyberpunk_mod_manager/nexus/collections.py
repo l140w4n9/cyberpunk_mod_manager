@@ -2,6 +2,7 @@
 """Nexus Mods Collection（收藏夹）解析与 GraphQL 查询。"""
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -104,6 +105,18 @@ def parse_collection_url(url: str) -> ParsedCollectionUrl:
 
 async def fetch_collection(slug: str, domain: str = GAME_DOMAIN) -> CollectionInfo:
     """通过 Nexus GraphQL 拉取收藏夹模组列表（按收藏夹顺序）。"""
+    try:
+        return await asyncio.wait_for(
+            _fetch_collection_impl(slug, domain),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError as exc:
+        raise CollectionParseError(
+            "请求 Nexus 收藏夹超时（60s），请检查网络或稍后重试"
+        ) from exc
+
+
+async def _fetch_collection_impl(slug: str, domain: str) -> CollectionInfo:
     headers = {
         **_build_headers(config.nexus_api_key),
         "Content-Type": "application/json",

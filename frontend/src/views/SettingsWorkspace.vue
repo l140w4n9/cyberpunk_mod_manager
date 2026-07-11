@@ -11,6 +11,7 @@ const form = ref({
   openai_api_key: '',
   model_name: 'gpt-4o-mini',
   openai_base_url: 'https://api.openai.com/v1',
+  allow_adult_content: false,
 })
 const configFile = ref('')
 const loading = ref(true)
@@ -31,6 +32,7 @@ async function load() {
       openai_api_key: data.openai_api_key || '',
       model_name: data.model_name || 'gpt-4o-mini',
       openai_base_url: data.openai_base_url || 'https://api.openai.com/v1',
+      allow_adult_content: Boolean(data.allow_adult_content),
     }
     configFile.value = data.config_file || ''
   } catch (e) {
@@ -114,6 +116,10 @@ onMounted(load)
           <label>API Key</label>
           <input v-model="form.nexus_api_key" type="password" placeholder="Nexus API Key" />
         </div>
+        <label class="checkbox-row">
+          <input v-model="form.allow_adult_content" type="checkbox" />
+          允许通过 API 自动下载成人内容模组（默认需手动下载后本地安装）
+        </label>
       </section>
 
       <section class="form-section">
@@ -209,5 +215,14 @@ onMounted(load)
   color: var(--danger);
   margin-bottom: 16px;
   line-height: 1.6;
+}
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 10px;
+  line-height: 1.5;
 }
 </style>

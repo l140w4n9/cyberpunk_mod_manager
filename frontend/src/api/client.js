@@ -7,13 +7,24 @@ function formatNetworkError(error) {
 }
 
 async function request(url, options = {}) {
-  const { timeoutMs = 0, ...fetchOptions } = options
-  let controller
+  const { timeoutMs = 0, signal: userSignal, ...fetchOptions } = options
+  const controller = new AbortController()
   let timeoutId
-  if (timeoutMs > 0 && !fetchOptions.signal) {
-    controller = new AbortController()
-    fetchOptions.signal = controller.signal
-    timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  let timedOut = false
+
+  if (timeoutMs > 0) {
+    timeoutId = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, timeoutMs)
+  }
+
+  if (userSignal) {
+    if (userSignal.aborted) {
+      controller.abort()
+    } else {
+      userSignal.addEventListener('abort', () => controller.abort(), { once: true })
+    }
   }
 
   let resp
@@ -21,13 +32,21 @@ async function request(url, options = {}) {
     resp = await fetch(url, {
       headers: { 'Content-Type': 'application/json', ...fetchOptions.headers },
       ...fetchOptions,
+      signal: controller.signal,
     })
   } catch (error) {
-    if (timeoutId) clearTimeout(timeoutId)
     if (error?.name === 'AbortError') {
-      throw new Error(timeoutMs > 0 ? `请求超时（${Math.round(timeoutMs / 1000)}s）` : '请求已取消')
+      if (timedOut) {
+        throw new Error(
+          `请求超时（${Math.round(timeoutMs / 1000)}s），请确认已运行 python -m cyberpunk_mod_manager 且能打开 /api/health`,
+        )
+      }
+      throw new Error('请求已取消')
     }
-    const message = error?.message === 'Failed to fetch' ? formatNetworkError(error) : (error?.message || formatNetworkError(error))
+    const message =
+      error?.message === 'Failed to fetch'
+        ? formatNetworkError(error)
+        : error?.message || formatNetworkError(error)
     throw new Error(message)
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
@@ -155,18 +174,20 @@ export const api = {
   uninstallPlan: (modId) => request(`/api/mods/${modId}/uninstall-plan`),
   modSummary: (modId, refresh = false) =>
     request(`/api/mods/${modId}/summary?refresh=${refresh}`),
-  parseCollection: (url) =>
+  parseCollection: (url, options = {}) =>
     request('/api/collections/parse', {
       method: 'POST',
       body: JSON.stringify({ url }),
-      timeoutMs: 120000,
+      timeoutMs: 45000,
+      ...options,
     }),
   installCollection: (payload) =>
     request('/api/collections/install', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  getCollectionJob: (jobId) => request(`/api/collections/jobs/${jobId}`),
+  getCollectionJob: (jobId, options = {}) =>
+    request(`/api/collections/jobs/${jobId}`, { timeoutMs: 10000, ...options }),
   cancelCollectionJob: (jobId) =>
     request(`/api/collections/jobs/${jobId}/cancel`, { method: 'POST' }),
   listPendingMods: () => request('/api/mods/pending'),

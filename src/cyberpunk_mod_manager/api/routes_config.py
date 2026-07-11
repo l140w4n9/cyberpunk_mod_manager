@@ -18,6 +18,7 @@ class ConfigOut(BaseModel):
     openai_api_key: str = ""
     model_name: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
+    allow_adult_content: bool = False
     config_file: str = ""
     has_data_dir: bool = False
     downloads_dir: str = ""
@@ -31,6 +32,7 @@ class ConfigUpdate(BaseModel):
     openai_api_key: str = ""
     model_name: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
+    allow_adult_content: bool = False
 
 
 @router.get("", response_model=ConfigOut)

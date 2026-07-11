@@ -34,8 +34,11 @@ def main() -> None:
         print(f"配置文件: {config.config_file}")
     else:
         print("未找到配置文件，请在前端「设置」页保存配置。")
+    os.environ["CP2077_PORT"] = str(port)
+    url = f"http://127.0.0.1:{port}"
+    print(f"请在浏览器打开: {url}")
     if port != 8000:
-        print(f"端口 8000 已被占用，改用 http://127.0.0.1:{port}")
+        print(f"（端口 8000 已被占用；勿使用 8000 或 Vite 默认代理地址）")
     try:
         uvicorn.run(app, host="127.0.0.1", port=port)
     except OSError as exc:

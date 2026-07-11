@@ -30,6 +30,9 @@ class InstallRecord(SQLModel, table=True):
     # JSON 字符串：[{"file": "...", "key": "...", "old_value": "..."}]
     config_writes: str = "[]"
     framework: str = ""
+    plan_source: str = ""
+    # JSON：[{"src","target","source","reason"}]
+    plan_json: str = "[]"
     installed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
     )

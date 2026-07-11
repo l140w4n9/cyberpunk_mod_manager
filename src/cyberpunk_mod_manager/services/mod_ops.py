@@ -68,6 +68,10 @@ def find_local_archive(mod_id: int) -> Path | None:
     for pattern in patterns:
         matches.extend(downloads.glob(pattern))
     if not matches:
+        for path in downloads.iterdir():
+            if path.is_file() and str(mod_id) in path.name:
+                matches.append(path)
+    if not matches:
         return None
     return max(matches, key=lambda p: p.stat().st_mtime)
 
@@ -348,8 +352,15 @@ async def refresh_dependencies(mod_id: int) -> list[dict]:
     return [d.to_dict() for d in get_dependency_infos(mod_id)]
 
 
-def install_from_archive(mod_id: int, archive_path: Path) -> str:
-    """从本地压缩包安装。"""
+async def install_from_archive(
+    mod_id: int,
+    archive_path: Path,
+    *,
+    smart_install: bool = True,
+) -> str:
+    """从本地压缩包安装（可选：先检查结构并由 LLM 制定安装计划）。"""
+    from .install_plan import build_install_plan
+
     with get_session() as session:
         mod = session.exec(
             select(Mod).where(Mod.nexus_mod_id == mod_id)
@@ -357,13 +368,49 @@ def install_from_archive(mod_id: int, archive_path: Path) -> str:
         if mod is None:
             return error_json(f"Mod {mod_id} not in inventory")
         internal_id = mod.id
+        mod_name = mod.name or ""
+        description = mod.description or ""
 
     if not archive_path.exists():
         return error_json(f"Archive not found: {archive_path}")
 
     register_local_archive(mod_id, archive_path)
+
+    file_mappings: dict[str, str] | None = None
+    plan_source = "rules"
+    plan_items: list[dict] = []
+    install_plan_preview: dict | None = None
+
+    if smart_install:
+        install_plan_preview = await build_install_plan(
+            mod_id,
+            archive_path,
+            mod_name=mod_name,
+            description=description,
+        )
+        file_mappings = install_plan_preview.get("file_mappings") or {}
+        plan_source = install_plan_preview.get("plan_source") or "rules"
+        plan_items = install_plan_preview.get("plan_items") or []
+        if not file_mappings:
+            return error_json(
+                "无法生成安装计划：压缩包内没有可安装文件",
+                mod_id=mod_id,
+                install_plan=install_plan_preview,
+            )
+
     installer = Installer()
-    result = installer.install(internal_id, archive_path)
+    try:
+        result = installer.install(
+            internal_id,
+            archive_path,
+            file_mappings=file_mappings,
+            plan_source=plan_source,
+            plan_items=plan_items,
+        )
+    except ValueError as exc:
+        return error_json(str(exc), mod_id=mod_id, install_plan=install_plan_preview)
+    except Exception as exc:
+        return error_json(f"Install failed: {exc}", mod_id=mod_id)
     plan = get_uninstall_plan(internal_id)
     return json.dumps(
         {
@@ -373,6 +420,8 @@ def install_from_archive(mod_id: int, archive_path: Path) -> str:
             "local_path": str(archive_path),
             "added_files_count": len(result.added_files),
             "skipped": result.skipped,
+            "plan_source": plan_source,
+            "install_plan": install_plan_preview,
             "uninstall_plan_preview": plan.to_dict() if plan else None,
         },
         ensure_ascii=False,
@@ -383,13 +432,17 @@ async def download_mod(
     mod_id: int,
     *,
     pin: FilePin | None = None,
+    allow_adult_content: bool | None = None,
 ) -> str:
     """通过 Nexus API 下载模组（v3 定位版本 + 遗留下载链接）。"""
+    permit_adult = (
+        config.allow_adult_content if allow_adult_content is None else allow_adult_content
+    )
     try:
         async with NexusClient() as client:
             batch = await client.get_mods_batch([mod_id])
             info = batch.get(mod_id)
-            if info and info.adult_content:
+            if info and info.adult_content and not permit_adult:
                 return error_json(
                     f"模组 {mod_id} 标记为成人内容，已阻止自动下载",
                     adult_content=True,
@@ -521,6 +574,7 @@ async def install_mod(
             return _already_installed_json(mod_id)
 
     used_local = False
+    used_local_reason = ""
     if local_only or skip_download:
         local = resolve_local_archive_path(mod_id) or find_local_archive(mod_id)
         if local is None:
@@ -535,12 +589,17 @@ async def install_mod(
         dl_result = await download_mod(mod_id, pin=pin)
         if is_error(dl_result):
             data = json.loads(dl_result)
-            if data.get("premium_only") and allow_local_fallback:
+            if allow_local_fallback and (
+                data.get("premium_only") or data.get("adult_content")
+            ):
                 local = find_local_archive(mod_id)
                 if local is not None:
                     register_local_archive(mod_id, local)
                     used_local = True
-                else:
+                    used_local_reason = (
+                        "adult_content" if data.get("adult_content") else "premium_only"
+                    )
+                elif data.get("premium_only"):
                     return error_json(
                         "该模组需 Nexus Premium 才能 API 下载。"
                         f"请手动下载后放入 {config.downloads_dir}，"
@@ -549,6 +608,18 @@ async def install_mod(
                         mod_id=mod_id,
                         downloads_dir=str(config.downloads_dir),
                     )
+                elif data.get("adult_content"):
+                    return error_json(
+                        "该模组为成人内容，管理器默认不通过 API 自动下载。"
+                        f"请在 Nexus 网站登录后手动下载，放入 {config.downloads_dir}，"
+                        f"文件名包含 {mod_id}（如 {mod_id}_xxx.zip），再重试安装。"
+                        "或在「设置」中开启「允许成人内容 API 下载」。",
+                        adult_content=True,
+                        mod_id=mod_id,
+                        downloads_dir=str(config.downloads_dir),
+                    )
+                else:
+                    return dl_result
             else:
                 return dl_result
 
@@ -556,14 +627,17 @@ async def install_mod(
     if archive_path is None:
         return error_json(f"No local archive for mod {mod_id}")
 
-    result = install_from_archive(mod_id, archive_path)
+    result = await install_from_archive(mod_id, archive_path)
     if is_error(result):
         return result
 
     data = json.loads(result)
     if used_local:
         data["used_local_fallback"] = True
-        data["premium_only"] = True
+        if used_local_reason == "premium_only":
+            data["premium_only"] = True
+        if used_local_reason == "adult_content":
+            data["adult_content"] = True
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -578,24 +652,14 @@ async def install_mod_with_dependencies(
 ) -> str:
     """安装模组及其缺失的前置依赖。"""
     await ensure_mod_in_inventory(mod_id)
-
-    if skip_installed:
-        _status, installed = _mod_status_info(mod_id)
-        if installed:
-            payload = json.loads(_already_installed_json(mod_id))
-            payload["dependencies"] = [
-                d.to_dict() for d in get_dependency_infos(mod_id)
-            ]
-            payload["dependencies_installed"] = []
-            payload["dependencies_failed"] = []
-            return json.dumps(payload, ensure_ascii=False)
-
     await refresh_dependencies(mod_id)
+
+    main_status, main_installed = _mod_status_info(mod_id)
     installed_deps: list[dict] = []
     failed_deps: list[dict] = []
+    missing = missing_dependencies(mod_id) if install_dependencies else []
 
-    if install_dependencies:
-        deps = missing_dependencies(mod_id)
+    if install_dependencies and missing:
 
         async def install_dep(dep) -> tuple[dict | None, dict | None]:
             dep_result = await install_mod(
@@ -619,7 +683,7 @@ async def install_mod_with_dependencies(
             }, None
 
         dep_outcomes = await gather_bounded(
-            [install_dep(dep) for dep in deps],
+            [install_dep(dep) for dep in missing],
             concurrency=DEFAULT_CONCURRENCY,
         )
         for ok_item, fail_item in dep_outcomes:
@@ -628,11 +692,60 @@ async def install_mod_with_dependencies(
             if fail_item is not None:
                 failed_deps.append(fail_item)
 
+    if main_installed and skip_installed:
+        name = ""
+        with get_session() as session:
+            mod = session.exec(
+                select(Mod).where(Mod.nexus_mod_id == mod_id)
+            ).first()
+            if mod is not None:
+                name = mod.name or ""
+        label = f"({name}) " if name else ""
+        repaired = [d for d in installed_deps if not d.get("skipped")]
+        skipped_deps = [d for d in installed_deps if d.get("skipped")]
+
+        if not missing and not failed_deps:
+            payload = json.loads(_already_installed_json(mod_id))
+            payload["dependencies"] = [
+                d.to_dict() for d in get_dependency_infos(mod_id)
+            ]
+            payload["dependencies_installed"] = installed_deps
+            payload["dependencies_failed"] = failed_deps
+            return json.dumps(payload, ensure_ascii=False)
+
+        parts: list[str] = []
+        if repaired:
+            parts.append(f"已补装 {len(repaired)} 个依赖")
+        if skipped_deps:
+            parts.append(f"{len(skipped_deps)} 个依赖已就绪")
+        if failed_deps:
+            parts.append(f"{len(failed_deps)} 个依赖失败")
+        message = f"模组 {mod_id} {label}{'，'.join(parts)}".strip()
+
+        return json.dumps(
+            {
+                "mod_id": mod_id,
+                "name": name,
+                "skipped": not repaired and not failed_deps,
+                "reason": "deps_repair",
+                "status": main_status,
+                "message": message,
+                "dependencies_installed": installed_deps,
+                "dependencies_failed": failed_deps,
+                "dependencies": [d.to_dict() for d in get_dependency_infos(mod_id)],
+                "added_files_count": sum(
+                    int((d.get("result") or {}).get("added_files_count") or 0)
+                    for d in repaired
+                ),
+            },
+            ensure_ascii=False,
+        )
+
     main_result = await install_mod(
         mod_id,
         allow_local_fallback=allow_local_fallback,
         local_only=local_only,
-        skip_installed=skip_installed,
+        skip_installed=False if missing else skip_installed,
         pin=pin,
     )
     if is_error(main_result):

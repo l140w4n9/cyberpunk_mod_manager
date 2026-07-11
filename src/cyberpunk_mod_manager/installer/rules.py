@@ -19,6 +19,14 @@ class InstallRule:
     description: str = ""
 
 
+# 压缩包内已含标准目录前缀时，优先保留完整相对路径（须在 *.archive / *.xl 之前）
+PATH_PREFIX_RULES: list[tuple[str, str, str]] = [
+    ("red4ext/", "red4ext", "RED4ext 插件"),
+    ("r6/config/", "r6/config", "redscript 用户配置"),
+    ("r6/cache/", "r6/cache", "redscript 缓存"),
+    ("engine/", "engine", "engine 配置"),
+]
+
 # Cyberpunk 2077 常见模组文件安装规则（顺序敏感，先匹配先生效）
 INSTALL_RULES: list[InstallRule] = [
     # 原生 archive 模组
@@ -51,6 +59,9 @@ INSTALL_RULES: list[InstallRule] = [
 def match_rule(rel_path: str) -> InstallRule | None:
     """根据文件相对路径匹配安装规则。"""
     rel_path = rel_path.replace("\\", "/")
+    for prefix, target_subpath, description in PATH_PREFIX_RULES:
+        if rel_path.startswith(prefix):
+            return InstallRule(f"{prefix}*", target_subpath, description)
     for rule in INSTALL_RULES:
         if fnmatch.fnmatch(rel_path, rule.pattern):
             return rule

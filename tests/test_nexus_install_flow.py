@@ -131,3 +131,48 @@ async def test_install_mod_succeeds_after_download() -> None:
     data = json.loads(result)
     assert "error" not in data
     assert data["added_files_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_install_mod_uses_local_fallback_for_adult_content(tmp_path: Path) -> None:
+    mod_id = 11077
+    _create_mod(nexus_mod_id=mod_id)
+    config.downloads_dir.mkdir(parents=True, exist_ok=True)
+    archive = config.downloads_dir / f"{mod_id}_test.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("demo.archive", b"x")
+
+    adult_error = json.dumps(
+        {
+            "error": "模组 11077 标记为成人内容，已阻止自动下载",
+            "adult_content": True,
+            "mod_id": mod_id,
+        }
+    )
+    ok_install = json.dumps(
+        {
+            "mod_id": mod_id,
+            "added_files_count": 1,
+            "source": "local",
+        }
+    )
+
+    with patch(
+        "cyberpunk_mod_manager.services.mod_ops.download_mod",
+        new=AsyncMock(return_value=adult_error),
+    ):
+        with patch(
+            "cyberpunk_mod_manager.services.mod_ops.ensure_mod_in_inventory",
+            new=AsyncMock(return_value=1),
+        ):
+            with patch(
+                "cyberpunk_mod_manager.services.mod_ops.install_from_archive",
+                new=AsyncMock(return_value=ok_install),
+            ):
+                result = await mod_ops.install_mod(mod_id)
+
+    data = json.loads(result)
+    assert data.get("used_local_fallback") is True
+    assert data.get("adult_content") is True
+    assert data.get("added_files_count") == 1
+

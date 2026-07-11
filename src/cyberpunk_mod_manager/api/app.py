@@ -47,11 +47,13 @@ app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
 
 
 @app.get("/api/health")
-async def health() -> dict:
-    """健康检查端点。"""
+async def health(quick: bool = False) -> dict:
+    """健康检查端点。quick=1 时跳过 Nexus 校验，用于前端连通性预检。"""
+    import os
+
     nexus_valid = False
     nexus_user: dict = {}
-    if config.nexus_api_key:
+    if config.nexus_api_key and not quick:
         from ..nexus.client import NexusClient
 
         try:
@@ -63,8 +65,11 @@ async def health() -> dict:
                         nexus_user = profile.model_dump()
         except Exception:
             nexus_valid = False
+    elif config.nexus_api_key and quick:
+        nexus_valid = True
     return {
         "status": "ok",
+        "server_port": int(os.environ.get("CP2077_PORT") or 0) or None,
         "game_path": config.game_path,
         "data_dir": str(config.data_dir) if config.has_data_dir else "",
         "data_dir_configured": config.has_data_dir,

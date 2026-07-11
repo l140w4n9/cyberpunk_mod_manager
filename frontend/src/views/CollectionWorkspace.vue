@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { api } from '../api/client'
 
 const STORAGE_KEY = 'cpmm_collection_state'
@@ -15,10 +15,11 @@ const collectionUrl = ref('')
 const parsing = ref(false)
 const parseError = ref('')
 const collection = ref(null)
-const queue = ref([])
+const queue = shallowRef([])
 const stats = ref(null)
 const jobId = ref('')
 const job = ref(null)
+const polling = ref(false)
 const revisionChanged = ref(false)
 const revisionChecking = ref(false)
 const parseStage = ref('')
@@ -26,6 +27,8 @@ const queuePageSize = 50
 const queueVisibleCount = ref(queuePageSize)
 let persistTimer = null
 let pollTimer = null
+let parseAbort = null
+let parseWatchdog = null
 
 const selectedCount = computed(() =>
   queue.value.filter((item) => item.selected && !item.installed).length,
@@ -39,6 +42,7 @@ const allSelected = computed({
     queue.value.forEach((item) => {
       if (!item.installed) item.selected = value
     })
+    onQueueSelectionChange()
   },
 })
 const isRunning = computed(() => job.value?.state === 'running')
@@ -64,36 +68,84 @@ function statusClass(item) {
   return item.status
 }
 
+async function applyQueueInChunks(items) {
+  const mapped = items.map((item) => ({ ...item }))
+  queue.value = []
+  queueVisibleCount.value = Math.min(queuePageSize, mapped.length || queuePageSize)
+  const chunkSize = 30
+  for (let i = 0; i < mapped.length; i += chunkSize) {
+    queue.value = queue.value.concat(mapped.slice(i, i + chunkSize))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
 async function parseCollection() {
   const url = collectionUrl.value.trim()
   if (!url) return
+  if (parseAbort) parseAbort.abort()
+  if (parseWatchdog) clearTimeout(parseWatchdog)
+  parseAbort = new AbortController()
   parsing.value = true
   parseStage.value = '正在请求 Nexus 收藏夹数据…'
   parseError.value = ''
-  stopPolling()
-  emit('install-finished')
-  jobId.value = ''
-  job.value = null
+
+  parseWatchdog = setTimeout(() => {
+    if (!parsing.value) return
+    if (parseAbort) parseAbort.abort()
+    parsing.value = false
+    parseStage.value = ''
+    parseError.value =
+      '解析超时：未收到后端响应。请确认终端里 python -m cyberpunk_mod_manager 正在运行，并访问 /api/health 检查。'
+  }, 50000)
+
   try {
-    const data = await api.parseCollection(url)
-    parseStage.value = '正在生成安装队列…'
+    stopPolling()
+    emit('install-finished')
+    jobId.value = ''
+    job.value = null
+    queue.value = []
+    collection.value = null
+    stats.value = null
+    const data = await api.parseCollection(url, { signal: parseAbort.signal })
+    if (parseWatchdog) clearTimeout(parseWatchdog)
+    parseWatchdog = null
     collection.value = data.collection
-    queue.value = (data.queue || []).map((item) => ({ ...item }))
     stats.value = data.stats
-    queueVisibleCount.value = Math.min(queuePageSize, queue.value.length || queuePageSize)
     revisionChanged.value = false
     applyRevisionFromParse()
-    persistState()
+    parsing.value = false
+    parseStage.value = '正在渲染安装队列…'
+    await nextTick()
+    await applyQueueInChunks(data.queue || [])
+    schedulePersistState()
   } catch (e) {
-    parseError.value = e.message
+    if (parseWatchdog) clearTimeout(parseWatchdog)
+    parseWatchdog = null
+    if (e?.message === '请求已取消' && !parseError.value) {
+      parseError.value = '已取消解析'
+    } else if (e?.message && e.message !== '请求已取消') {
+      parseError.value = e.message
+    }
     collection.value = null
     queue.value = []
     stats.value = null
-    persistState()
+    schedulePersistState()
   } finally {
+    if (parseWatchdog) clearTimeout(parseWatchdog)
+    parseWatchdog = null
     parsing.value = false
     parseStage.value = ''
+    parseAbort = null
   }
+}
+
+function cancelParse() {
+  if (parseAbort) parseAbort.abort()
+  if (parseWatchdog) clearTimeout(parseWatchdog)
+  parseWatchdog = null
+  parsing.value = false
+  parseStage.value = ''
+  parseError.value = '已取消解析'
 }
 
 function applyRevisionFromParse() {
@@ -123,19 +175,36 @@ function schedulePersistState() {
 
 function persistState() {
   try {
+    const compactQueue = queue.value.map((item) => ({
+      mod_id: item.mod_id,
+      name: item.name,
+      order: item.order,
+      optional: item.optional,
+      selected: item.selected,
+      installed: item.installed,
+      status: item.status,
+      message: item.message,
+      collection_file_id: item.collection_file_id,
+      collection_version_id: item.collection_version_id,
+      collection_file_version: item.collection_file_version,
+    }))
     sessionStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         collectionUrl: collectionUrl.value,
         collection: collection.value,
-        queue: queue.value,
+        queue: compactQueue.length > 120 ? [] : compactQueue,
         stats: stats.value,
         jobId: jobId.value,
         job: job.value,
       }),
     )
   } catch {
-    /* sessionStorage 可能已满，忽略 */
+    try {
+      sessionStorage.removeItem(STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -146,16 +215,20 @@ async function restoreState() {
     const data = JSON.parse(raw)
     if (data.collectionUrl) collectionUrl.value = data.collectionUrl
     if (data.collection) collection.value = data.collection
-    if (Array.isArray(data.queue) && data.queue.length) {
-      queue.value = data.queue
-      queueVisibleCount.value = Math.min(queuePageSize, data.queue.length)
-    }
     if (data.stats) stats.value = data.stats
+    if (Array.isArray(data.queue) && data.queue.length) {
+      if (data.queue.length > 120) {
+        parseError.value = '队列过大未缓存，请重新点击「解析并生成队列」'
+      } else {
+        queue.value = data.queue
+        queueVisibleCount.value = Math.min(queuePageSize, data.queue.length)
+      }
+    }
     if (data.jobId) {
       jobId.value = data.jobId
       job.value = data.job || null
       try {
-        const latest = await api.getCollectionJob(data.jobId)
+        const latest = await api.getCollectionJob(data.jobId, { timeoutMs: 8000 })
         job.value = latest
         syncQueueFromJob(latest.items || [])
         if (latest.state === 'running') {
@@ -171,7 +244,7 @@ async function restoreState() {
       }
     }
   } catch {
-    /* ignore corrupt state */
+    sessionStorage.removeItem(STORAGE_KEY)
   }
 }
 
@@ -276,6 +349,11 @@ function syncQueueFromJob(jobItems) {
   })
 }
 
+function onQueueSelectionChange() {
+  queue.value = [...queue.value]
+  schedulePersistState()
+}
+
 function startPolling() {
   stopPolling()
   polling.value = true
@@ -304,8 +382,7 @@ onMounted(() => {
   restoreState()
 })
 
-watch([collectionUrl, collection, stats, jobId, job], schedulePersistState, { deep: true })
-watch(queue, schedulePersistState, { deep: true })
+watch([collectionUrl, collection, stats, jobId, job], schedulePersistState)
 
 onUnmounted(() => {
   stopPolling()
@@ -340,11 +417,20 @@ onUnmounted(() => {
         >
           {{ parsing ? '解析中...' : '解析并生成队列' }}
         </button>
+        <button
+          v-if="parsing"
+          class="btn-ghost"
+          @click="cancelParse"
+        >
+          取消
+        </button>
       </div>
       <p v-if="!health.data_dir_configured" class="hint warn">请先在「设置」页配置数据目录</p>
+      <p v-if="!health.nexus_configured" class="hint warn">请先在「设置」页配置 Nexus API Key</p>
       <p v-if="!health.nexus_valid && health.nexus_configured" class="hint warn">Nexus API Key 无效，无法解析收藏夹</p>
       <p v-if="parseError" class="hint err">{{ parseError }}</p>
       <p v-else-if="parsing && parseStage" class="hint">{{ parseStage }}</p>
+      <p v-else-if="parsing" class="hint">解析中，最长等待约 45 秒…</p>
     </section>
 
     <section v-if="collection" class="summary panel">
@@ -406,9 +492,10 @@ onUnmounted(() => {
         >
           <label class="queue-check">
             <input
-              v-model="item.selected"
+              :checked="item.selected"
               type="checkbox"
               :disabled="isRunning || item.installed"
+              @change="(e) => { item.selected = e.target.checked; onQueueSelectionChange() }"
             />
           </label>
           <div class="queue-main">

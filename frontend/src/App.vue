@@ -143,10 +143,18 @@ async function handleInstallWithDeps(modId) {
   setStatus(`正在安装模组 ${modId} 及依赖...`, 'info')
   try {
     const data = await api.installModWithDeps(modId)
-    if (data.skipped) {
+    const repaired = (data.dependencies_installed || []).filter((d) => !d.skipped).length
+    const depsFail = (data.dependencies_failed || []).length
+    if (data.reason === 'deps_repair' || (data.skipped && (repaired || depsFail))) {
+      setStatus(
+        data.message ||
+          `✓ 已补装 ${repaired} 个依赖` +
+            (depsFail ? `，${depsFail} 个依赖失败` : ''),
+        depsFail ? 'err' : 'ok',
+      )
+    } else if (data.skipped) {
       setStatus(data.message || `模组 ${modId} 已安装，已跳过`, 'info')
     } else {
-      const depsFail = (data.dependencies_failed || []).length
       setStatus(
         `✓ 安装完成，新增 ${data.added_files_count || 0} 文件` +
           (depsFail ? `，${depsFail} 个依赖失败` : ''),

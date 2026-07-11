@@ -2,6 +2,9 @@
 """收藏夹安装 API。"""
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -10,6 +13,7 @@ from ..nexus.collections import CollectionParseError, fetch_collection
 from ..services import collection_ops
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _ensure_data_dir() -> None:
@@ -37,12 +41,26 @@ class CollectionInstallRequest(BaseModel):
 async def parse_collection(req: CollectionParseRequest) -> dict:
     """解析收藏夹 URL，生成安装队列预览。"""
     _ensure_data_dir()
+    logger.info("collection parse start: %s", req.url[:120])
     try:
-        return await collection_ops.parse_collection_url_to_queue(req.url)
+        result = await asyncio.wait_for(
+            collection_ops.parse_collection_url_to_queue(req.url),
+            timeout=75.0,
+        )
+    except asyncio.TimeoutError as exc:
+        logger.warning("collection parse timeout: %s", req.url[:120])
+        raise HTTPException(504, "解析收藏夹超时，请检查网络或稍后重试") from exc
     except CollectionParseError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
+        logger.exception("collection parse failed")
         raise HTTPException(502, f"拉取收藏夹失败: {exc}") from exc
+    logger.info(
+        "collection parse done: slug=%s mods=%s",
+        (result.get("collection") or {}).get("slug"),
+        len(result.get("queue") or []),
+    )
+    return result
 
 
 @router.post("/install")

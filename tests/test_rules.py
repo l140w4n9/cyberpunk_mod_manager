@@ -55,3 +55,26 @@ def test_match_ini_at_root() -> None:
     rule = match_rule("config.ini")
     assert rule is not None
     assert resolve_target("folder/config.ini", rule) == "config.ini"
+
+
+def test_match_red4ext_archivexl_structure() -> None:
+    dll = "red4ext/plugins/ArchiveXL/ArchiveXL.dll"
+    xl = "red4ext/plugins/ArchiveXL/Bundle/Migration.xl"
+    archive = "red4ext/plugins/ArchiveXL/Bundle/ArchiveXL.archive"
+    toml = "r6/config/redsUserHints/ArchiveXL.toml"
+
+    dll_rule = match_rule(dll)
+    assert dll_rule is not None
+    assert resolve_target(dll, dll_rule) == dll
+
+    xl_rule = match_rule(xl)
+    assert xl_rule is not None
+    assert resolve_target(xl, xl_rule) == xl
+
+    archive_rule = match_rule(archive)
+    assert archive_rule is not None
+    assert resolve_target(archive, archive_rule) == archive
+
+    toml_rule = match_rule(toml)
+    assert toml_rule is not None
+    assert resolve_target(toml, toml_rule) == toml
