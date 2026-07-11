@@ -21,6 +21,7 @@ TOOL_LABELS = {
     "search_mod": "查询模组信息",
     "check_dependencies": "检查前置依赖",
     "install_mod_with_dependencies": "安装模组及依赖",
+    "install_mods_batch": "批量安装模组",
     "install_mod": "下载并安装模组",
     "install_local_mod": "本地压缩包安装",
     "uninstall_mod": "卸载模组",

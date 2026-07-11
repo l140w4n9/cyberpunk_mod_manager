@@ -1,11 +1,17 @@
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { api } from '../api/client'
 import {
   createTool,
   findTool,
   stateLabel,
 } from '../utils/agent'
+import {
+  formatSessionTime,
+  getActiveSessionId,
+  serializeMessages,
+  setActiveSessionId,
+} from '../utils/chatSession'
 import ToolStep from '../components/agent/ToolStep.vue'
 import TraceInspector from '../components/agent/TraceInspector.vue'
 
@@ -18,19 +24,22 @@ const props = defineProps({
   },
 })
 
-const messages = ref([
-  {
-    id: 'welcome',
-    role: 'assistant',
-    content:
-      '你好！我是模组管理 Agent。给我一个 Nexus 模组 ID 或自然语言指令，我会展示完整的工具调用过程并自动安装。',
-  },
-])
+const WELCOME = {
+  id: 'welcome',
+  role: 'assistant',
+  content:
+    '你好！我是模组管理 Agent。给我一个 Nexus 模组 ID 或自然语言指令，我会展示完整的工具调用过程并自动安装。',
+}
+
+const sessions = ref([])
+const activeSessionId = ref(null)
+const messages = ref([WELCOME])
 const input = ref('')
 const sending = ref(false)
 const selectedTool = ref(null)
 const selectedTurn = ref(null)
 const logRef = ref(null)
+const sessionsLoading = ref(true)
 
 async function scrollToBottom() {
   await nextTick()
@@ -40,6 +49,72 @@ async function scrollToBottom() {
 function selectTool(tool, turn) {
   selectedTool.value = tool
   selectedTurn.value = turn
+}
+
+async function persistMessages() {
+  if (!activeSessionId.value) return
+  try {
+    await api.saveSession(activeSessionId.value, serializeMessages(messages.value))
+    await refreshSessions()
+  } catch {
+    /* 保存失败不阻断对话 */
+  }
+}
+
+async function refreshSessions() {
+  try {
+    sessions.value = await api.listSessions()
+  } catch {
+    sessions.value = []
+  }
+}
+
+async function loadSession(sessionId) {
+  const data = await api.getSession(sessionId)
+  activeSessionId.value = sessionId
+  setActiveSessionId(sessionId)
+  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  selectedTool.value = null
+  selectedTurn.value = null
+  await scrollToBottom()
+}
+
+async function ensureSession() {
+  if (activeSessionId.value) return activeSessionId.value
+  const data = await api.createSession()
+  activeSessionId.value = data.id
+  setActiveSessionId(data.id)
+  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  await refreshSessions()
+  return data.id
+}
+
+async function startNewSession() {
+  const data = await api.createSession()
+  activeSessionId.value = data.id
+  setActiveSessionId(data.id)
+  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  selectedTool.value = null
+  selectedTurn.value = null
+  await refreshSessions()
+  await scrollToBottom()
+}
+
+async function switchSession(sessionId) {
+  if (sessionId === activeSessionId.value) return
+  await loadSession(sessionId)
+}
+
+async function removeSession(sessionId) {
+  await api.deleteSession(sessionId)
+  await refreshSessions()
+  if (activeSessionId.value === sessionId) {
+    if (sessions.value.length) {
+      await loadSession(sessions.value[0].id)
+    } else {
+      await startNewSession()
+    }
+  }
 }
 
 function handleStreamEvent(turn, event, data) {
@@ -116,6 +191,8 @@ async function send() {
     return
   }
 
+  const sessionId = await ensureSession()
+
   messages.value.push({ id: `u-${Date.now()}`, role: 'user', content: msg })
   input.value = ''
   sending.value = true
@@ -134,34 +211,92 @@ async function send() {
   }
   messages.value.push(turn)
   selectedTurn.value = turn
+  await persistMessages()
   await scrollToBottom()
 
   try {
-    await api.chatStream(msg, (event, data) => {
-      handleStreamEvent(turn, event, data)
-      scrollToBottom()
-    })
+    await api.chatStream(
+      msg,
+      (event, data) => {
+        handleStreamEvent(turn, event, data)
+        scrollToBottom()
+      },
+      sessionId,
+    )
     if (turn.loading) {
       turn.loading = false
       turn.status = turn.status === 'running' ? 'done' : turn.status
       turn.endedAt = Date.now()
     }
     if (!turn.reply && !turn.tools.length) turn.reply = '（无回复）'
+    await persistMessages()
     emit('done')
   } catch (e) {
     turn.loading = false
     turn.status = 'error'
     turn.reply = '出错: ' + e.message
     turn.endedAt = Date.now()
+    await persistMessages()
   } finally {
     sending.value = false
     await scrollToBottom()
   }
 }
+
+onMounted(async () => {
+  sessionsLoading.value = true
+  try {
+    await refreshSessions()
+    const savedId = getActiveSessionId()
+    if (savedId && sessions.value.some((s) => s.id === savedId)) {
+      await loadSession(savedId)
+    } else if (sessions.value.length) {
+      await loadSession(sessions.value[0].id)
+    } else {
+      await startNewSession()
+    }
+  } catch {
+    messages.value = [WELCOME]
+  } finally {
+    sessionsLoading.value = false
+  }
+})
 </script>
 
 <template>
   <div class="workspace">
+    <aside class="session-panel">
+      <div class="session-header">
+        <span class="session-title">会话</span>
+        <button class="btn-ghost btn-sm" type="button" @click="startNewSession">+ 新建</button>
+      </div>
+      <div v-if="sessionsLoading" class="session-empty">加载中...</div>
+      <div v-else-if="!sessions.length" class="session-empty">暂无会话</div>
+      <ul v-else class="session-list">
+        <li
+          v-for="s in sessions"
+          :key="s.id"
+          class="session-item"
+          :class="{ active: s.id === activeSessionId }"
+          @click="switchSession(s.id)"
+        >
+          <div class="session-item-top">
+            <span class="session-name">{{ s.title || '新会话' }}</span>
+            <button
+              class="session-del"
+              type="button"
+              title="删除会话"
+              @click.stop="removeSession(s.id)"
+            >
+              ×
+            </button>
+          </div>
+          <div class="session-preview">{{ s.preview || '（空）' }}</div>
+          <div class="session-time mono">{{ formatSessionTime(s.updated_at) }}</div>
+        </li>
+      </ul>
+    </aside>
+
     <div class="workspace-main">
       <header class="workspace-header">
         <div>
@@ -264,11 +399,95 @@ async function send() {
 <style scoped>
 .workspace {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  grid-template-columns: 200px 1fr 340px;
   height: calc(100vh - var(--topbar-height));
   min-height: 520px;
   background: var(--bg);
 }
+
+.session-panel {
+  border-right: 1px solid var(--border);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.session-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.session-list {
+  list-style: none;
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.session-item {
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.session-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.session-item.active {
+  background: rgba(0, 212, 255, 0.08);
+  border-color: rgba(0, 212, 255, 0.2);
+}
+.session-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-name {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-del {
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+}
+.session-del:hover { color: var(--danger); }
+.session-preview {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-time {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 4px;
+  opacity: 0.7;
+}
+.session-empty {
+  padding: 20px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .workspace-main {
   display: flex;
   flex-direction: column;
@@ -460,11 +679,27 @@ async function send() {
   overflow: hidden;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1200px) {
   .workspace {
     grid-template-columns: 1fr;
     height: auto;
     min-height: calc(100vh - 120px);
+  }
+  .session-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 160px;
+  }
+  .session-list {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
+  .session-item {
+    min-width: 140px;
+    margin-bottom: 0;
   }
   .workspace-trace {
     border-top: 1px solid var(--border);

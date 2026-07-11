@@ -107,6 +107,88 @@ def parse_dependencies_from_text(
     return list(found.values())
 
 
+def _lookup_mod_name(session, nexus_mod_id: int) -> str:
+    mod = session.exec(
+        select(Mod).where(Mod.nexus_mod_id == nexus_mod_id)
+    ).first()
+    if mod is None:
+        return ""
+    return (mod.name or "").strip()
+
+
+def enrich_dependency_names_sync() -> int:
+    """从库存模组表补全空的依赖名称。"""
+    updated = 0
+    with get_session() as session:
+        records = session.exec(select(ModDependency)).all()
+        for rec in records:
+            if (rec.dep_name or "").strip():
+                continue
+            name = _lookup_mod_name(session, rec.dep_nexus_mod_id)
+            if name:
+                rec.dep_name = name
+                session.add(rec)
+                updated += 1
+        if updated:
+            session.commit()
+    return updated
+
+
+async def enrich_dependency_names_from_nexus() -> int:
+    """通过 Nexus API 补全仍无名称的依赖。"""
+    with get_session() as session:
+        missing_ids = {
+            rec.dep_nexus_mod_id
+            for rec in session.exec(select(ModDependency)).all()
+            if not (rec.dep_name or "").strip()
+        }
+    if not missing_ids:
+        return 0
+
+    names: dict[int, str] = {}
+    try:
+        async with NexusClient() as client:
+            for dep_id in missing_ids:
+                try:
+                    details = await client.get_mod_details(dep_id)
+                    if details.name:
+                        names[dep_id] = details.name
+                except Exception:
+                    continue
+    except Exception:
+        return 0
+
+    updated = 0
+    with get_session() as session:
+        for rec in session.exec(select(ModDependency)).all():
+            if (rec.dep_name or "").strip():
+                continue
+            name = names.get(rec.dep_nexus_mod_id, "")
+            if name:
+                rec.dep_name = name
+                session.add(rec)
+                updated += 1
+        if updated:
+            session.commit()
+    return updated
+
+
+def _resolve_dep_name(session, rec: ModDependency, dep_mod: Mod | None) -> str:
+    name = (rec.dep_name or "").strip()
+    if name:
+        return name
+    if dep_mod is not None and (dep_mod.name or "").strip():
+        name = dep_mod.name.strip()
+        rec.dep_name = name
+        session.add(rec)
+        return name
+    name = _lookup_mod_name(session, rec.dep_nexus_mod_id)
+    if name:
+        rec.dep_name = name
+        session.add(rec)
+    return name
+
+
 async def collect_dependencies(mod_id: int, description: str = "", summary: str = "") -> list[dict]:
     """汇总解析结果与内置已知依赖。"""
     deps: dict[int, dict] = {}
@@ -126,8 +208,15 @@ async def collect_dependencies(mod_id: int, description: str = "", summary: str 
             "source": "known",
         }
 
-    # 尝试为无名称依赖补全
+    # 尝试为无名称依赖补全（Nexus API + 本地库存）
     missing_names = [d for d in deps.values() if not d.get("name")]
+    if missing_names:
+        with get_session() as session:
+            for item in missing_names:
+                name = _lookup_mod_name(session, int(item["mod_id"]))
+                if name:
+                    item["name"] = name
+        missing_names = [d for d in deps.values() if not d.get("name")]
     if missing_names:
         try:
             async with NexusClient() as client:
@@ -171,6 +260,7 @@ def get_dependency_infos(owner_nexus_mod_id: int) -> list[DependencyInfo]:
             select(ModDependency).where(ModDependency.owner_mod_id == owner.id)
         ).all()
         result: list[DependencyInfo] = []
+        dirty = False
         for rec in records:
             dep_mod = session.exec(
                 select(Mod).where(Mod.nexus_mod_id == rec.dep_nexus_mod_id)
@@ -184,15 +274,21 @@ def get_dependency_infos(owner_nexus_mod_id: int) -> list[DependencyInfo]:
                     else str(dep_mod.status)
                 )
                 installed = status == "installed"
+            had_name = bool((rec.dep_name or "").strip())
+            name = _resolve_dep_name(session, rec, dep_mod)
+            if not had_name and name:
+                dirty = True
             result.append(
                 DependencyInfo(
                     nexus_mod_id=rec.dep_nexus_mod_id,
-                    name=rec.dep_name,
+                    name=name,
                     source=rec.source,
                     installed=installed,
                     status=status,
                 )
             )
+        if dirty:
+            session.commit()
         return result
 
 

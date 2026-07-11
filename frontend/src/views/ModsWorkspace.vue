@@ -1,12 +1,16 @@
 <script setup>
-import { ref } from 'vue'
-import { STATUS_LABELS } from '../api/client'
+import { computed, ref } from 'vue'
+import ModCard from '../components/mods/ModCard.vue'
+import DepChipList from '../components/mods/DepChipList.vue'
+import { filterMods } from '../utils/mods'
 
-defineProps({
+const props = defineProps({
   mods: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   installing: { type: Boolean, default: false },
   status: { type: Object, default: () => ({ message: '', type: '' }) },
+  /** installed | pending | incomplete */
+  filterMode: { type: String, default: 'installed' },
 })
 
 const emit = defineEmits([
@@ -21,17 +25,27 @@ const modIdInput = ref('')
 const archiveNameInput = ref('')
 const depsReport = ref(null)
 const checkingDeps = ref(false)
-const expandedId = ref(null)
 
-function formatDate(value) {
-  return value ? new Date(value).toLocaleString('zh-CN') : '—'
+const PAGE_META = {
+  installed: {
+    title: '已安装模组',
+    desc: '依赖已满足、可正常使用的模组',
+    empty: '暂无已安装且依赖完整的模组',
+  },
+  pending: {
+    title: '待安装模组',
+    desc: '已入库但尚未安装到游戏的模组',
+    empty: '暂无待安装模组',
+  },
+  incomplete: {
+    title: '依赖不全',
+    desc: '已安装但缺少必需依赖，可能无法正常使用',
+    empty: '暂无依赖不全的模组',
+  },
 }
 
-function summaryLabel(source) {
-  if (source === 'ai') return 'AI'
-  if (source === 'fallback') return '简介'
-  return ''
-}
+const pageMeta = computed(() => PAGE_META[props.filterMode] || PAGE_META.installed)
+const filteredMods = computed(() => filterMods(props.mods, props.filterMode))
 
 function submitInstall(withDeps = false) {
   const id = modIdInput.value.trim()
@@ -62,12 +76,13 @@ function checkDeps() {
   <div class="mods-view">
     <header class="view-header">
       <div>
-        <h2>模组库存</h2>
-        <p>管理已安装模组、依赖关系与安全卸载</p>
+        <h2>{{ pageMeta.title }}</h2>
+        <p>{{ pageMeta.desc }}</p>
       </div>
+      <span class="count-badge">{{ filteredMods.length }} 项</span>
     </header>
 
-    <section class="install-section panel">
+    <section v-if="filterMode === 'installed'" class="install-section panel">
       <div class="install-grid">
         <div class="input-wrap">
           <label>Nexus Mod ID</label>
@@ -99,66 +114,24 @@ function checkDeps() {
 
       <div v-if="depsReport" class="deps-report">
         <span :class="depsReport.all_satisfied ? 'ok' : 'warn'">
-          {{ depsReport.all_satisfied ? '依赖已满足' : `缺失 ${depsReport.missing_count} 项` }}
+          {{ depsReport.all_satisfied ? '依赖已满足' : `缺失 ${depsReport.missing_count} 项必需依赖` }}
         </span>
-        <div class="chip-row">
-          <span
-            v-for="dep in depsReport.dependencies"
-            :key="dep.nexus_mod_id"
-            class="chip"
-            :class="dep.installed ? 'ok' : 'miss'"
-          >
-            {{ dep.name || dep.nexus_mod_id }}
-          </span>
-        </div>
+        <DepChipList :dependencies="depsReport.dependencies" />
       </div>
     </section>
 
     <div v-if="loading" class="empty-state"><span class="spinner" /> 加载中...</div>
-    <div v-else-if="!mods.length" class="empty-state">暂无模组</div>
+    <div v-else-if="!filteredMods.length" class="empty-state">{{ pageMeta.empty }}</div>
 
     <div v-else class="mod-grid">
-      <article v-for="mod in mods" :key="mod.id" class="mod-card panel">
-        <div class="mod-top">
-          <div>
-            <div class="mod-title-row">
-              <span class="mod-id mono">#{{ mod.nexus_mod_id }}</span>
-              <h3>{{ mod.name || '—' }}</h3>
-              <span class="badge" :class="mod.status">{{ STATUS_LABELS[mod.status] || mod.status }}</span>
-            </div>
-            <p v-if="mod.summary_line" class="summary">
-              <span v-if="summaryLabel(mod.summary_source)" class="tag">{{ summaryLabel(mod.summary_source) }}</span>
-              {{ mod.summary_line }}
-            </p>
-          </div>
-          <button
-            class="btn-danger btn-sm"
-            :disabled="mod.status !== 'installed'"
-            @click="$emit('uninstall', mod.nexus_mod_id)"
-          >
-            卸载
-          </button>
-        </div>
-
-        <div class="mod-meta mono">
-          <span>v{{ mod.version || '—' }}</span>
-          <span>{{ formatDate(mod.installed_at) }}</span>
-        </div>
-
-        <div v-if="mod.dependencies?.length" class="deps-section">
-          <span class="section-label">前置依赖</span>
-          <div class="chip-row">
-            <span
-              v-for="dep in mod.dependencies"
-              :key="dep.nexus_mod_id"
-              class="chip"
-              :class="dep.installed ? 'ok' : 'miss'"
-            >
-              {{ dep.name || dep.nexus_mod_id }}
-            </span>
-          </div>
-        </div>
-      </article>
+      <ModCard
+        v-for="mod in filteredMods"
+        :key="mod.id"
+        :mod="mod"
+        :show-warning="filterMode === 'incomplete'"
+        @uninstall="$emit('uninstall', $event)"
+        @install-with-deps="$emit('install-with-deps', $event)"
+      />
     </div>
 
     <div v-if="status.message" class="toast" :class="status.type">{{ status.message }}</div>
@@ -171,6 +144,10 @@ function checkDeps() {
   max-width: 1100px;
 }
 .view-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 20px;
 }
 .view-header h2 {
@@ -181,6 +158,14 @@ function checkDeps() {
   font-size: 13px;
   color: var(--muted);
   margin-top: 4px;
+}
+.count-badge {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  white-space: nowrap;
 }
 .install-section { margin-bottom: 20px; }
 .install-grid {
@@ -197,21 +182,6 @@ function checkDeps() {
 }
 .deps-report .ok { color: var(--ok); font-size: 13px; font-weight: 600; }
 .deps-report .warn { color: var(--warn); font-size: 13px; font-weight: 600; }
-.chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.chip {
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.2);
-}
-.chip.ok { border-color: rgba(46, 230, 166, 0.3); color: var(--ok); }
-.chip.miss { border-color: rgba(255, 77, 109, 0.3); color: var(--danger); }
 
 .empty-state {
   text-align: center;
@@ -222,50 +192,6 @@ function checkDeps() {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 14px;
-}
-.mod-card { padding: 16px; }
-.mod-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-}
-.mod-title-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.mod-id { color: var(--accent2); font-size: 12px; }
-.mod-title-row h3 { font-size: 15px; }
-.summary {
-  font-size: 13px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-.tag {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 10px;
-  background: rgba(252, 238, 10, 0.1);
-  color: var(--accent);
-}
-.mod-meta {
-  display: flex;
-  gap: 16px;
-  margin-top: 10px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.deps-section { margin-top: 12px; }
-.section-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
 }
 .toast {
   position: fixed;

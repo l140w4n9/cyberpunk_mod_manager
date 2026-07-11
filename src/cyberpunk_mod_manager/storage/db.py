@@ -8,7 +8,7 @@ from typing import Iterator
 from sqlmodel import Session, SQLModel, create_engine
 
 from ..config import config
-from ..models import Mod, InstallRecord, Setting, ModDependency  # noqa: F401  # 注册表模型
+from ..models import Mod, InstallRecord, Setting, ModDependency, ChatSession  # noqa: F401  # 注册表模型
 
 
 engine = create_engine(

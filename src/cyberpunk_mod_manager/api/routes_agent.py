@@ -2,7 +2,7 @@
 """Agent 路由：接收自然语言或 mod_id，交由 AgentScope Agent 处理。"""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,6 +13,7 @@ from agentscope.message import UserMsg
 from ..agent.streaming import _format_sse, run_agent_collect, run_agent_stream
 from ..agent.tools import build_agent
 from ..config import config
+from ..services import chat_sessions
 
 router = APIRouter()
 
@@ -42,6 +43,16 @@ def _get_model():
 
 class AgentRequest(BaseModel):
     message: str
+    session_id: Optional[str] = None
+
+
+class SessionCreateRequest(BaseModel):
+    title: str = ""
+
+
+class SessionSaveRequest(BaseModel):
+    messages: list[dict[str, Any]]
+    title: Optional[str] = None
 
 
 class ToolCallOut(BaseModel):
@@ -57,6 +68,7 @@ class AgentResponse(BaseModel):
     reply: str
     mod_id: Optional[int] = None
     tool_calls: list[ToolCallOut] = Field(default_factory=list)
+    session_id: Optional[str] = None
 
 
 def _build_user_message(text: str, raw: str) -> UserMsg:
@@ -68,6 +80,52 @@ def _build_user_message(text: str, raw: str) -> UserMsg:
     else:
         content = raw
     return UserMsg(content=content, name="user")
+
+
+@router.get("/sessions")
+async def list_sessions() -> list[dict[str, Any]]:
+    """列出所有 Agent 会话。"""
+    return chat_sessions.list_sessions()
+
+
+@router.post("/sessions")
+async def create_session(req: SessionCreateRequest | None = None) -> dict[str, Any]:
+    """创建新会话。"""
+    title = req.title if req else ""
+    data = chat_sessions.create_session(title=title)
+    if data is None:
+        raise HTTPException(500, "创建会话失败")
+    return data
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str) -> dict[str, Any]:
+    """获取会话及完整消息历史。"""
+    data = chat_sessions.get_session_messages(session_id)
+    if data is None:
+        raise HTTPException(404, "会话不存在")
+    return data
+
+
+@router.put("/sessions/{session_id}")
+async def save_session(session_id: str, req: SessionSaveRequest) -> dict[str, Any]:
+    """保存会话消息。"""
+    data = chat_sessions.save_session_messages(
+        session_id,
+        req.messages,
+        title=req.title,
+    )
+    if data is None:
+        raise HTTPException(404, "会话不存在")
+    return data
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str) -> dict[str, bool]:
+    """删除会话。"""
+    if not chat_sessions.delete_session(session_id):
+        raise HTTPException(404, "会话不存在")
+    return {"ok": True}
 
 
 @router.post("/chat", response_model=AgentResponse)
@@ -86,6 +144,7 @@ async def chat(req: AgentRequest) -> AgentResponse:
         reply=result.reply,
         mod_id=int(text) if text.isdigit() else None,
         tool_calls=[ToolCallOut(**t.to_dict()) for t in result.tool_calls],
+        session_id=req.session_id,
     )
 
 
@@ -104,8 +163,11 @@ async def chat_stream(req: AgentRequest) -> StreamingResponse:
         try:
             async for event, data in run_agent_stream(agent, msg):
                 payload = dict(data)
-                if event == "done" and text.isdigit():
-                    payload["mod_id"] = int(text)
+                if event == "done":
+                    if text.isdigit():
+                        payload["mod_id"] = int(text)
+                    if req.session_id:
+                        payload["session_id"] = req.session_id
                 yield _format_sse(event, payload)
         except Exception as exc:
             yield _format_sse("error", {"message": str(exc)})

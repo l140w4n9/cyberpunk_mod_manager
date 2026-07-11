@@ -37,11 +37,11 @@ function parseSseChunk(buffer) {
   return { events, rest }
 }
 
-export async function chatStream(message, onEvent) {
+export async function chatStream(message, onEvent, sessionId = null) {
   const resp = await fetch('/api/agent/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, session_id: sessionId }),
   })
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}))
@@ -101,12 +101,26 @@ export const api = {
   uninstallPlan: (modId) => request(`/api/mods/${modId}/uninstall-plan`),
   modSummary: (modId, refresh = false) =>
     request(`/api/mods/${modId}/summary?refresh=${refresh}`),
-  chat: (message) =>
+  chat: (message, sessionId = null) =>
     request('/api/agent/chat', {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, session_id: sessionId }),
     }),
   chatStream,
+  listSessions: () => request('/api/agent/sessions'),
+  createSession: (title = '') =>
+    request('/api/agent/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  getSession: (sessionId) => request(`/api/agent/sessions/${sessionId}`),
+  saveSession: (sessionId, messages, title = null) =>
+    request(`/api/agent/sessions/${sessionId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ messages, title }),
+    }),
+  deleteSession: (sessionId) =>
+    request(`/api/agent/sessions/${sessionId}`, { method: 'DELETE' }),
 }
 
 export const STATUS_LABELS = {

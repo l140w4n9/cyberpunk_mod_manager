@@ -78,8 +78,15 @@ async def list_mods(
     refresh_summaries: bool = Query(False, description="为缺少摘要的模组调用 LLM 生成"),
 ) -> list[ModOut]:
     """列出所有库存模组（含依赖关系与一句话摘要）。"""
+    from ..nexus.dependencies import (
+        enrich_dependency_names_from_nexus,
+        enrich_dependency_names_sync,
+    )
+
     # 将同步 DB 操作卸载到线程池，避免阻塞事件循环
     mods = await asyncio.to_thread(_load_all_mods)
+    await asyncio.to_thread(enrich_dependency_names_sync)
+    await enrich_dependency_names_from_nexus()
 
     if refresh_summaries and config.openai_api_key:
         await mod_ops.refresh_mod_summaries()

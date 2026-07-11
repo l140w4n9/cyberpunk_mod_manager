@@ -1,9 +1,17 @@
 <script setup>
-defineProps({
+import { computed } from 'vue'
+import { filterMods } from '../../utils/mods'
+
+const props = defineProps({
   active: { type: String, default: 'agent' },
   health: { type: Object, required: true },
+  mods: { type: Array, default: () => [] },
 })
+
 defineEmits(['navigate', 'refresh'])
+
+const pendingCount = computed(() => filterMods(props.mods, 'pending').length)
+const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').length)
 </script>
 
 <template>
@@ -25,13 +33,33 @@ defineEmits(['navigate', 'refresh'])
         <span class="nav-icon">◈</span>
         Agent 运行
       </button>
+
+      <div class="nav-group-label">模组管理</div>
       <button
         class="nav-item"
         :class="{ active: active === 'mods' }"
         @click="$emit('navigate', 'mods')"
       >
         <span class="nav-icon">▣</span>
-        模组库存
+        已安装
+      </button>
+      <button
+        class="nav-item"
+        :class="{ active: active === 'mods-pending' }"
+        @click="$emit('navigate', 'mods-pending')"
+      >
+        <span class="nav-icon">○</span>
+        待安装
+        <span v-if="pendingCount" class="nav-badge warn">{{ pendingCount }}</span>
+      </button>
+      <button
+        class="nav-item"
+        :class="{ active: active === 'mods-incomplete' }"
+        @click="$emit('navigate', 'mods-incomplete')"
+      >
+        <span class="nav-icon">⚠</span>
+        依赖不全
+        <span v-if="incompleteCount" class="nav-badge danger">{{ incompleteCount }}</span>
       </button>
     </nav>
 
@@ -94,6 +122,13 @@ defineEmits(['navigate', 'refresh'])
   flex-direction: column;
   gap: 4px;
 }
+.nav-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 10px 12px 4px;
+}
 .nav-item {
   display: flex;
   align-items: center;
@@ -117,6 +152,21 @@ defineEmits(['navigate', 'refresh'])
   color: var(--accent2);
 }
 .nav-icon { font-size: 14px; opacity: 0.8; }
+.nav-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+.nav-badge.warn {
+  background: rgba(255, 176, 32, 0.15);
+  color: var(--warn);
+}
+.nav-badge.danger {
+  background: rgba(255, 77, 109, 0.15);
+  color: var(--danger);
+}
 .sidebar-footer {
   padding: 14px 12px;
   border-top: 1px solid var(--border);
@@ -152,7 +202,9 @@ defineEmits(['navigate', 'refresh'])
     flex-direction: row;
     flex: none;
     padding: 8px;
+    flex-wrap: wrap;
   }
+  .nav-group-label { display: none; }
   .sidebar-footer {
     display: flex;
     align-items: center;

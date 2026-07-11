@@ -56,6 +56,17 @@ async function loadMods() {
 
 function navigate(view) {
   activeView.value = view
+  try {
+    localStorage.setItem('cpmm_active_view', view)
+  } catch {
+    /* ignore */
+  }
+}
+
+const MODS_FILTER = {
+  mods: 'installed',
+  'mods-pending': 'pending',
+  'mods-incomplete': 'incomplete',
 }
 
 async function handleInstall(modId) {
@@ -148,6 +159,12 @@ function cancelUninstall() {
 }
 
 onMounted(async () => {
+  try {
+    const saved = localStorage.getItem('cpmm_active_view')
+    if (saved) activeView.value = saved
+  } catch {
+    /* ignore */
+  }
   await Promise.all([checkHealth(), loadMods()])
 })
 </script>
@@ -157,6 +174,7 @@ onMounted(async () => {
     <AppSidebar
       :active="activeView"
       :health="health"
+      :mods="mods"
       @navigate="navigate"
       @refresh="loadMods"
     />
@@ -164,11 +182,12 @@ onMounted(async () => {
     <main class="main-content">
       <AgentWorkspace v-if="activeView === 'agent'" :health="health" @done="loadMods" />
       <ModsWorkspace
-        v-else
+        v-else-if="MODS_FILTER[activeView]"
         :mods="mods"
         :loading="loading"
         :installing="installing"
         :status="status"
+        :filter-mode="MODS_FILTER[activeView]"
         @install="handleInstall"
         @install-with-deps="handleInstallWithDeps"
         @install-local="handleInstallLocal"

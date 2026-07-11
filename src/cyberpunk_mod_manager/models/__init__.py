@@ -4,5 +4,13 @@ from .mod import Mod, ModStatus
 from .install_record import InstallRecord
 from .settings import Setting
 from .dependency import ModDependency
+from .chat_session import ChatSession
 
-__all__ = ["Mod", "ModStatus", "InstallRecord", "Setting", "ModDependency"]
+__all__ = [
+    "Mod",
+    "ModStatus",
+    "InstallRecord",
+    "Setting",
+    "ModDependency",
+    "ChatSession",
+]
