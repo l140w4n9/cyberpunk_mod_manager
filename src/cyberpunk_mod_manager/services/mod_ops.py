@@ -215,12 +215,7 @@ async def ensure_mod_in_inventory(
         mod = session.get(Mod, internal_id)
         if mod and mod.nexus_version_id:
             version_id = mod.nexus_version_id
-    dep_items = await collect_dependencies(
-        mod_id,
-        details.description,
-        details.summary,
-        version_id=version_id,
-    )
+    dep_items = await collect_dependencies(mod_id, version_id=version_id)
     sync_dependencies(internal_id, dep_items)
     if config.openai_api_key:
         try:
@@ -342,12 +337,7 @@ async def refresh_dependencies(mod_id: int) -> list[dict]:
         mod = session.get(Mod, internal_id)
         if mod and mod.nexus_version_id:
             version_id = mod.nexus_version_id
-    dep_items = await collect_dependencies(
-        mod_id,
-        details.description,
-        details.summary,
-        version_id=version_id,
-    )
+    dep_items = await collect_dependencies(mod_id, version_id=version_id)
     sync_dependencies(internal_id, dep_items)
     return [d.to_dict() for d in get_dependency_infos(mod_id)]
 

@@ -14,7 +14,6 @@ from cyberpunk_mod_manager.nexus.dependencies import (
     KNOWN_MOD_DEPENDENCIES,
     _nexus_requirement_source,
     collect_dependencies,
-    parse_dependencies_from_text,
     sync_dependencies,
 )
 from cyberpunk_mod_manager.nexus.client import parse_materialized_dependencies
@@ -24,39 +23,8 @@ from cyberpunk_mod_manager.storage.db import get_session, init_db
 from sqlmodel import select
 
 
-def test_parse_dependencies_from_text() -> None:
-    text = (
-        'Requires <a href="https://www.nexusmods.com/cyberpunk2077/mods/107">CET</a> '
-        'and https://www.nexusmods.com/cyberpunk2077/mods/1511'
-    )
-    deps = parse_dependencies_from_text(text, exclude_mod_id=27967)
-    ids = {d["mod_id"] for d in deps}
-    assert ids == {107, 1511}
-
-
-def test_parse_dependencies_excludes_successor_link() -> None:
-    text = (
-        "this is the successor to "
-        '[url=https://www.nexusmods.com/cyberpunk2077/mods/7871]Rebecca\'s Apartment[/url] '
-        "which was set to hidden a long time ago"
-    )
-    deps = parse_dependencies_from_text(text, exclude_mod_id=18777, owner_mod_id=18777)
-    assert deps == []
-
-
-def test_parse_dependencies_games_url_format() -> None:
-    text = (
-        'Requires <a href="https://www.nexusmods.com/games/cyberpunk2077/mods/107">CET</a>'
-    )
-    deps = parse_dependencies_from_text(text, exclude_mod_id=27967)
-    assert {d["mod_id"] for d in deps} == {107}
-
-
 @pytest.mark.asyncio
-async def test_collect_dependencies_prefers_nexus_requirements() -> None:
-    description = (
-        "successor to https://www.nexusmods.com/cyberpunk2077/mods/7871 Rebecca's Apartment"
-    )
+async def test_collect_dependencies_uses_nexus_requirements_only() -> None:
     mock_reqs = [
         {"mod_id": 107, "name": "Cyber Engine Tweaks", "source": "nexus"},
         {"mod_id": 21422, "name": "Native Interactions Framework", "source": "nexus"},
@@ -69,10 +37,46 @@ async def test_collect_dependencies_prefers_nexus_requirements() -> None:
         "cyberpunk_mod_manager.nexus.dependencies.fetch_nexus_mod_requirements",
         new=AsyncMock(return_value=mock_reqs),
     ):
-        deps = await collect_dependencies(18777, description, "")
+        deps = await collect_dependencies(18777)
     ids = {int(d["mod_id"]) for d in deps}
     assert ids == {107, 21422, 4198}
-    assert 7871 not in ids
+
+
+@pytest.mark.asyncio
+async def test_collect_dependencies_ignores_description_links() -> None:
+    """描述中的模组链接不再计入依赖。"""
+    mock_reqs = [
+        {"mod_id": 4198, "name": "ArchiveXL", "source": "nexus"},
+        {"mod_id": 7780, "name": "Codeware", "source": "nexus"},
+        {"mod_id": 2380, "name": "RED4ext", "source": "nexus"},
+        {"mod_id": 1511, "name": "redscript", "source": "nexus"},
+        {"mod_id": 4197, "name": "TweakXL", "source": "nexus"},
+    ]
+    with patch(
+        "cyberpunk_mod_manager.nexus.dependencies.fetch_materialized_mod_dependencies",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "cyberpunk_mod_manager.nexus.dependencies.fetch_nexus_mod_requirements",
+        new=AsyncMock(return_value=mock_reqs),
+    ):
+        deps = await collect_dependencies(11077)
+    ids = {int(d["mod_id"]) for d in deps}
+    assert ids == {4198, 7780, 2380, 1511, 4197}
+    assert 790 not in ids
+    assert 9812 not in ids
+
+
+@pytest.mark.asyncio
+async def test_collect_dependencies_empty_when_no_official_sources() -> None:
+    with patch(
+        "cyberpunk_mod_manager.nexus.dependencies.fetch_materialized_mod_dependencies",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "cyberpunk_mod_manager.nexus.dependencies.fetch_nexus_mod_requirements",
+        new=AsyncMock(return_value=[]),
+    ):
+        deps = await collect_dependencies(99999)
+    assert deps == []
 
 
 def test_nexus_requirement_source_optional_notes() -> None:
@@ -129,7 +133,7 @@ async def test_collect_dependencies_prefers_materialized_over_legacy() -> None:
             return_value=[{"mod_id": 9999, "name": "Legacy Only", "source": "nexus"}]
         ),
     ):
-        deps = await collect_dependencies(12345, "", "")
+        deps = await collect_dependencies(12345)
     ids = {int(d["mod_id"]) for d in deps}
     assert ids == {107}
     assert deps[0]["source"] == "materialized"
@@ -137,7 +141,14 @@ async def test_collect_dependencies_prefers_materialized_over_legacy() -> None:
 
 @pytest.mark.asyncio
 async def test_collect_dependencies_includes_known() -> None:
-    deps = await collect_dependencies(27967, "", "")
+    with patch(
+        "cyberpunk_mod_manager.nexus.dependencies.fetch_materialized_mod_dependencies",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "cyberpunk_mod_manager.nexus.dependencies.fetch_nexus_mod_requirements",
+        new=AsyncMock(return_value=[]),
+    ):
+        deps = await collect_dependencies(27967)
     ids = {int(d["mod_id"]) for d in deps}
     for item in KNOWN_MOD_DEPENDENCIES[27967]:
         assert int(item["mod_id"]) in ids

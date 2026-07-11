@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""模组依赖解析与同步。"""
+"""模组依赖解析与同步。
+
+仅使用 Nexus 官方数据源，不从模组描述/HTML 文本推断依赖：
+1. v3 物化依赖（文件级）
+2. GraphQL legacy nexusRequirements（作者在 Nexus 登记的依赖）
+3. KNOWN_MOD_DEPENDENCIES 内置补充（显式硬编码，非文本解析）
+"""
 from __future__ import annotations
 
 import re
@@ -40,39 +46,7 @@ OPTIONAL_NOTES_RE = re.compile(
 
 _game_id_cache: int | None = None
 
-NEXUS_MOD_LINK_RE = re.compile(
-    r"nexusmods\.com/(?:games/)?cyberpunk2077/mods/(\d+)",
-    re.IGNORECASE,
-)
-
-# 描述里指向其他模组但非前置依赖的语境（如前作、致谢、捐赠等）
-NON_DEPENDENCY_CONTEXT_RE = re.compile(
-    r"(successor\s+to|predecessor|replacing|replaced\s+by|old\s+version|"
-    r"previous\s+version|also\s+see|my\s+other\s+mod|credit|thanks\s+to|"
-    r"donat|buy\s*me\s*a\s*coffee|inspired\s+by|similar\s+to|"
-    r"which\s+was\s+set\s+to\s+hidden|hidden\s+a\s+long\s+time\s+ago|"
-    r"前身|旧版|捐赠|感谢)",
-    re.IGNORECASE,
-)
-
-REQUIREMENT_CONTEXT_RE = re.compile(
-    r"(require|required|dependency|dependencies|prerequisite|needs?|must\s+have|"
-    r"install\s+first|before\s+install|mandatory|前置|依赖|必装|需要先安装)",
-    re.IGNORECASE,
-)
-
-# 可选依赖（替代品/增强包，非必装）
-OPTIONAL_DEPENDENCY_IDS: dict[int, set[int]] = {
-    23032: {24453},  # NC Mediascape Enhancer 为替代增强，非硬前置
-}
-
-OPTIONAL_CONTEXT_RE = re.compile(
-    r"(alternative|optional|instead|recommend(?:ed)?|enhancer|mediascape|"
-    r"替代|可选|增强|推荐)",
-    re.IGNORECASE,
-)
-
-# 社区常见前置（Nexus 无结构化依赖 API 时的补充）
+# 社区常见前置（Nexus 无结构化依赖时的显式补充，非描述解析）
 KNOWN_MOD_DEPENDENCIES: dict[int, list[dict[str, str | int]]] = {
     27967: [
         {"mod_id": 107, "name": "Cyber Engine Tweaks"},
@@ -117,16 +91,6 @@ class DependentInfo:
             "installed": self.installed,
             "status": self.status,
         }
-
-
-def _is_non_dependency_context(text: str, match_start: int) -> bool:
-    window = text[max(0, match_start - 160): match_start + 40]
-    return bool(NON_DEPENDENCY_CONTEXT_RE.search(window))
-
-
-def _is_requirement_context(text: str, match_start: int) -> bool:
-    window = text[max(0, match_start - 200): match_start + 80]
-    return bool(REQUIREMENT_CONTEXT_RE.search(window))
 
 
 async def _get_game_id() -> int | None:
@@ -280,45 +244,6 @@ async def fetch_nexus_mod_requirements(mod_id: int) -> list[dict]:
     return deps
 
 
-def _resolve_dep_source(owner_mod_id: int, dep_id: int, text: str, match_start: int) -> str:
-    if dep_id in OPTIONAL_DEPENDENCY_IDS.get(owner_mod_id, set()):
-        return "optional"
-    window = text[max(0, match_start - 240): match_start + 120]
-    if OPTIONAL_CONTEXT_RE.search(window):
-        return "optional"
-    return "parsed"
-
-
-def parse_dependencies_from_text(
-    text: str,
-    *,
-    exclude_mod_id: int | None = None,
-    owner_mod_id: int | None = None,
-    strict: bool = False,
-) -> list[dict]:
-    """从描述/HTML 文本中解析 Nexus 模组链接。"""
-    found: dict[int, dict] = {}
-    for match in NEXUS_MOD_LINK_RE.finditer(text or ""):
-        dep_id = int(match.group(1))
-        if exclude_mod_id and dep_id == exclude_mod_id:
-            continue
-        match_start = match.start()
-        if _is_non_dependency_context(text or "", match_start):
-            continue
-        if strict and not _is_requirement_context(text or "", match_start):
-            continue
-        source = "parsed"
-        if owner_mod_id is not None:
-            source = _resolve_dep_source(
-                owner_mod_id, dep_id, text or "", match_start
-            )
-        found.setdefault(
-            dep_id,
-            {"mod_id": dep_id, "name": "", "source": source},
-        )
-    return list(found.values())
-
-
 def _lookup_mod_name(session, nexus_mod_id: int) -> str:
     mod = session.exec(
         select(Mod).where(Mod.nexus_mod_id == nexus_mod_id)
@@ -408,61 +333,36 @@ def _resolve_dep_name(session, rec: ModDependency, dep_mod: Mod | None) -> str:
 
 async def collect_dependencies(
     mod_id: int,
-    description: str = "",
-    summary: str = "",
     *,
     version_id: str | None = None,
 ) -> list[dict]:
-    """汇总 v3 物化依赖、GraphQL legacy requirements、描述解析与内置已知依赖。
-
-    优先级（高 → 低）：
-    1. v3 ``getModFileVersionDependencyMaterialized``（文件级新模型）
-    2. GraphQL ``nexusRequirements``（legacy 模组级要求）
-    3. ``KNOWN_MOD_DEPENDENCIES`` 硬编码补充
-    4. 描述文本链接解析（有过结构化数据时启用 strict 模式）
-    """
+    """汇总官方依赖来源与内置补充表。"""
     deps: dict[int, dict] = {}
 
     materialized = await fetch_materialized_mod_dependencies(
         mod_id, version_id=version_id
     )
-    structured_sources = bool(materialized)
-
     for item in materialized:
         deps[int(item["mod_id"])] = item
 
-    if not structured_sources:
+    if not materialized:
         for item in await fetch_nexus_mod_requirements(mod_id):
             dep_id = int(item.get("mod_id") or 0)
             if not dep_id:
                 continue
             deps[dep_id] = item
-        structured_sources = any(
-            d.get("source") in ("nexus", "optional", "materialized")
-            for d in deps.values()
-        )
-
-    combined_text = f"{summary}\n{description}"
-    for item in parse_dependencies_from_text(
-        combined_text,
-        exclude_mod_id=mod_id,
-        owner_mod_id=mod_id,
-        strict=structured_sources,
-    ):
-        dep_id = int(item["mod_id"])
-        if dep_id in deps:
-            continue
-        deps[dep_id] = item
 
     for item in KNOWN_MOD_DEPENDENCIES.get(mod_id, []):
         dep_id = int(item["mod_id"])
-        deps[dep_id] = {
-            "mod_id": dep_id,
-            "name": str(item.get("name", "")),
-            "source": "known",
-        }
+        deps.setdefault(
+            dep_id,
+            {
+                "mod_id": dep_id,
+                "name": str(item.get("name", "")),
+                "source": "known",
+            },
+        )
 
-    # 尝试为无名称依赖补全（Nexus API + 本地库存）
     missing_names = [d for d in deps.values() if not d.get("name")]
     if missing_names:
         with get_session() as session:
@@ -507,7 +407,7 @@ def sync_dependencies(owner_internal_id: int, dep_items: list[dict]) -> None:
                     owner_mod_id=owner_internal_id,
                     dep_nexus_mod_id=int(item["mod_id"]),
                     dep_name=str(item.get("name", "")),
-                    source=str(item.get("source", "parsed")),
+                    source=str(item.get("source", "nexus")),
                 )
             )
         session.commit()

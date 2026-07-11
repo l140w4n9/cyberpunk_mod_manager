@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import json
-from pathlib import Path
 
 from cyberpunk_mod_manager.nexus.client import NexusClient
-from cyberpunk_mod_manager.nexus.dependencies import parse_dependencies_from_text
+from cyberpunk_mod_manager.nexus.dependencies import (
+    collect_dependencies,
+    fetch_materialized_mod_dependencies,
+    fetch_nexus_mod_requirements,
+)
 
 
 async def inspect_mod(mod_id: int) -> None:
@@ -16,10 +19,14 @@ async def inspect_mod(mod_id: int) -> None:
         details = await client.get_mod_details(mod_id)
         files = await client.get_mod_files(mod_id)
 
-    text = f"{details.summary}\n{details.description}"
-    deps = parse_dependencies_from_text(text, exclude_mod_id=mod_id, owner_mod_id=mod_id)
+    materialized = await fetch_materialized_mod_dependencies(mod_id)
+    graphql = await fetch_nexus_mod_requirements(mod_id)
+    collected = await collect_dependencies(mod_id)
+
     print(f"=== mod {mod_id}: {details.name} ===")
-    print("parsed from description:", [d["mod_id"] for d in deps])
+    print("materialized:", [d["mod_id"] for d in materialized])
+    print("graphql:", [d["mod_id"] for d in graphql])
+    print("collect_dependencies:", [d["mod_id"] for d in collected])
     print("raw keys:", sorted(raw.keys()))
     for key in ("requirements", "dependencies", "nexus_requirements"):
         if key in raw:
@@ -29,18 +36,18 @@ async def inspect_mod(mod_id: int) -> None:
         print(
             " ",
             f.file_id,
-            f.is_primary,
-            (f.description or "")[:300].replace("\n", " "),
+            f.file_name,
+            f.version,
+            f.category,
         )
-    out = Path(__file__).with_name(f"_{mod_id}_raw.json")
-    out.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
-    print("wrote", out)
+    print("description excerpt:", (details.description or "")[:400])
 
 
 async def main() -> None:
-    for mid in (18777, 107, 21422, 4198, 7871):
-        await inspect_mod(mid)
-        print()
+    import sys
+
+    mod_id = int(sys.argv[1]) if len(sys.argv) > 1 else 11077
+    await inspect_mod(mod_id)
 
 
 if __name__ == "__main__":

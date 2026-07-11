@@ -20,9 +20,11 @@ def test_toolkit_has_all_tools() -> None:
         "install_mods_batch",
         "install_mod",
         "install_local_mod",
+        "preview_install_plan",
         "scan_local_folder_tool",
         "install_local_folder",
         "uninstall_mod",
+        "uninstall_mod_with_plan_review",
         "list_mods",
         "list_pending_mods",
         "list_incomplete_mods",
@@ -52,4 +54,4 @@ def test_build_agent_without_model_call() -> None:
     agent = build_agent(mock_model)
     assert agent.name == "CyberpunkModAgent"
     schemas = asyncio.run(agent.toolkit.get_tool_schemas())
-    assert len(schemas) == 19
+    assert len(schemas) == 21

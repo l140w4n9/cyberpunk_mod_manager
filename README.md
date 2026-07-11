@@ -6,7 +6,7 @@
 
 - 🤖 **Agent 驱动**：自然语言或 mod_id 驱动，自动查询、安装、卸载与维护
 - 📥 **Nexus v3 集成**：模组详情、批量查询、版本解析、物化依赖、热门/追踪/活动 feed
-- 🔗 **智能依赖解析**：v3 物化依赖 → GraphQL `nexusRequirements` → 社区已知前置 → 描述文本解析
+- 🔗 **官方依赖解析**：v3 物化依赖 → GraphQL `nexusRequirements` → 内置社区前置表（不从描述文本推断）
 - 📦 **收藏夹安装**：解析 Nexus Collection URL，按收藏夹 pin 的**指定文件版本**批量安装
 - 🩺 **健康审查**：待安装 / 依赖不全 / 更新检测 / LLM 修复建议，可选自动修复
 - 🗂️ **可逆安装**：记录新增文件、创建目录、备份原文件，卸载时反向执行
@@ -132,8 +132,9 @@ npm run build    # 输出到 src/cyberpunk_mod_manager/web/
 
 1. v3 物化依赖（按已安装 `nexus_version_id` 或最新主文件版本）
 2. GraphQL `nexusRequirements`（`notes` 识别 optional）
-3. 内置 `KNOWN_MOD_DEPENDENCIES` 社区前置表
-4. 模组描述中的 Nexus 链接（有结构化数据时启用严格模式，过滤「successor to」等非依赖链接）
+3. 内置 `KNOWN_MOD_DEPENDENCIES` 社区前置表（显式硬编码补充）
+
+不再从模组描述/HTML 中扫描 Nexus 链接，避免致谢、推荐、前作链接被误报为依赖。
 
 ## REST API 概览
 

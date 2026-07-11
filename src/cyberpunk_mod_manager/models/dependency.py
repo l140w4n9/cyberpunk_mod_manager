@@ -16,5 +16,5 @@ class ModDependency(SQLModel, table=True):
     # 依赖的 Nexus mod_id
     dep_nexus_mod_id: int = Field(index=True)
     dep_name: str = ""
-    # parsed: 描述解析 | nexus: GraphQL legacy | materialized: v3 文件级 | known: 内置 | optional: 可选
-    source: str = "parsed"
+    # materialized | nexus | known | optional | external
+    source: str = "nexus"
