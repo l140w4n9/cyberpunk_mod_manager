@@ -72,6 +72,7 @@ class Installer:
         file_mappings: dict[str, str] | None = None,
         plan_source: str = "",
         plan_items: list[dict] | None = None,
+        merge: bool = False,
     ) -> InstallResult:
         """安装指定模组的压缩包，返回安装结果（含卸载计划）。"""
         if not archive_path.exists():
@@ -155,6 +156,7 @@ class Installer:
                 archive_path,
                 plan_source=plan_source,
                 plan_items=plan_items or [],
+                merge=merge,
             )
             # 更新模组状态
             self._update_mod_status(mod_id, ModStatus.INSTALLED)
@@ -246,7 +248,54 @@ class Installer:
         *,
         plan_source: str = "",
         plan_items: list[dict] | None = None,
+        merge: bool = False,
     ) -> None:
+        with get_session() as session:
+            existing = session.exec(
+                select(InstallRecord).where(InstallRecord.mod_id == mod_id)
+            ).first()
+            if merge and existing is not None:
+                added = json.loads(existing.added_files)
+                created = json.loads(existing.created_dirs)
+                backed = json.loads(existing.backed_up_files)
+                plan_json = json.loads(existing.plan_json or "[]")
+                sources = existing.source_file or ""
+                added_set = set(added)
+                for rel in result.added_files:
+                    if rel not in added_set:
+                        added.append(rel)
+                        added_set.add(rel)
+                created_set = set(created)
+                for rel in result.created_dirs:
+                    if rel not in created_set:
+                        created.append(rel)
+                        created_set.add(rel)
+                backup_paths = {item.get("path") for item in backed}
+                for item in result.backed_up_files:
+                    if item.get("path") not in backup_paths:
+                        backed.append(item)
+                if plan_items:
+                    plan_json.extend(plan_items)
+                source_file = sources
+                if str(archive_path) not in sources.split(";"):
+                    source_file = (
+                        f"{sources};{archive_path}" if sources else str(archive_path)
+                    )
+                record = InstallRecord(
+                    mod_id=mod_id,
+                    added_files=json.dumps(added, ensure_ascii=False),
+                    created_dirs=json.dumps(created, ensure_ascii=False),
+                    backed_up_files=json.dumps(backed, ensure_ascii=False),
+                    config_writes=existing.config_writes,
+                    source_file=source_file,
+                    plan_source=plan_source or existing.plan_source,
+                    plan_json=json.dumps(plan_json, ensure_ascii=False),
+                )
+                session.delete(existing)
+                session.add(record)
+                session.commit()
+                return
+
         record = InstallRecord(
             mod_id=mod_id,
             added_files=json.dumps(result.added_files, ensure_ascii=False),

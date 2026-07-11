@@ -39,7 +39,7 @@ async def test_download_mod_returns_json_error_on_403() -> None:
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         client.get_mods_batch = AsyncMock(return_value={})
-        client.resolve_target_version = AsyncMock(
+        client.resolve_install_versions = AsyncMock(
             side_effect=NexusAPIError(
                 "Nexus API 403 Forbidden",
                 status_code=403,

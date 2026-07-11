@@ -347,6 +347,7 @@ async def install_from_archive(
     archive_path: Path,
     *,
     smart_install: bool = True,
+    merge: bool = False,
 ) -> str:
     """从本地压缩包安装（可选：先检查结构并由 LLM 制定安装计划）。"""
     from .install_plan import build_install_plan
@@ -396,6 +397,7 @@ async def install_from_archive(
             file_mappings=file_mappings,
             plan_source=plan_source,
             plan_items=plan_items,
+            merge=merge,
         )
     except ValueError as exc:
         return error_json(str(exc), mod_id=mod_id, install_plan=install_plan_preview)
@@ -438,15 +440,32 @@ async def download_mod(
                     adult_content=True,
                     mod_id=mod_id,
                 )
-            mod_file = await client.resolve_target_version(mod_id, pin=pin)
-            if mod_file is None or not mod_file.file_id:
+            mod_files = await client.resolve_install_versions(mod_id, pin=pin)
+            if not mod_files:
                 return error_json(f"No file found for mod {mod_id}")
-            local_path = await client.download_file(
-                mod_id,
-                mod_file.file_id,
-                config.downloads_dir,
-                file_name=mod_file.file_name,
-            )
+            local_paths: list[dict] = []
+            for mod_file in mod_files:
+                if not mod_file.file_id:
+                    continue
+                local_path = await client.download_file(
+                    mod_id,
+                    mod_file.file_id,
+                    config.downloads_dir,
+                    file_name=mod_file.file_name,
+                )
+                local_paths.append(
+                    {
+                        "file_id": mod_file.file_id,
+                        "version_id": mod_file.version_id,
+                        "file_name": mod_file.file_name,
+                        "version": mod_file.version,
+                        "local_path": str(local_path),
+                    }
+                )
+            if not local_paths:
+                return error_json(f"No file found for mod {mod_id}")
+            mod_file = mod_files[0]
+            local_path = Path(local_paths[0]["local_path"])
     except NexusAPIError as exc:
         return error_json(
             str(exc),
@@ -483,6 +502,8 @@ async def download_mod(
             "file_name": mod_file.file_name,
             "version": mod_file.version,
             "local_path": str(local_path),
+            "local_paths": local_paths,
+            "files_count": len(local_paths),
             "source": "api",
         },
         ensure_ascii=False,
@@ -565,6 +586,7 @@ async def install_mod(
 
     used_local = False
     used_local_reason = ""
+    dl_result: str | None = None
     if local_only or skip_download:
         local = resolve_local_archive_path(mod_id) or find_local_archive(mod_id)
         if local is None:
@@ -617,9 +639,33 @@ async def install_mod(
     if archive_path is None:
         return error_json(f"No local archive for mod {mod_id}")
 
-    result = await install_from_archive(mod_id, archive_path)
-    if is_error(result):
-        return result
+    archive_paths = [archive_path]
+    if not used_local and dl_result and not is_error(dl_result):
+        try:
+            dl_data = json.loads(dl_result)
+            extra = [
+                Path(item["local_path"])
+                for item in dl_data.get("local_paths") or []
+                if item.get("local_path")
+            ]
+            if extra:
+                archive_paths = extra
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+    result = None
+    for index, path in enumerate(archive_paths):
+        one = await install_from_archive(
+            mod_id,
+            path,
+            merge=index > 0,
+        )
+        if is_error(one):
+            return one
+        result = one
+
+    if result is None:
+        return error_json(f"Install failed for mod {mod_id}")
 
     data = json.loads(result)
     if used_local:

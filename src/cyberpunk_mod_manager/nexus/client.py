@@ -460,17 +460,26 @@ class NexusClient:
         internal = await self.resolve_mod_internal_id(mod_id)
         if not internal:
             return None
-        mod_files = await self.get_mod_files_v3(internal)
-        if not mod_files:
-            return None
-        primary = next((f for f in mod_files if f.get("is_primary")), mod_files[0])
-        versions = await self.get_mod_file_versions(str(primary["id"]))
-        latest = _pick_latest_version(versions)
-        if not latest:
-            return None
-        mf = _version_to_mod_file(latest)
-        mf.internal_mod_id = internal
-        return mf
+        from .file_selection import pick_install_versions
+
+        details = await self.get_mod_details(mod_id)
+        versions = await pick_install_versions(self, mod_id, details=details)
+        return versions[0] if versions else None
+
+    async def resolve_install_versions(
+        self,
+        mod_id: int,
+        *,
+        pin: FilePin | None = None,
+    ) -> list[ModFile]:
+        """挑选应下载安装的版本列表（支持多主文件）。"""
+        if pin and (pin.version_id or pin.game_scoped_file_id):
+            single = await self.resolve_target_version(mod_id, pin=pin)
+            return [single] if single and single.file_id else []
+        from .file_selection import pick_install_versions
+
+        details = await self.get_mod_details(mod_id)
+        return await pick_install_versions(self, mod_id, details=details)
 
     async def pick_primary_file(self, mod_id: int) -> Optional[ModFile]:
         return await self.resolve_target_version(mod_id)
@@ -499,14 +508,8 @@ class NexusClient:
         return dest
 
 
-def select_download_file(files: list[ModFile]) -> ModFile | None:
+def select_download_file(files: list[ModFile], *, mod_name: str = "") -> ModFile | None:
     """兼容旧调用：从 ModFile 列表选主文件。"""
-    if not files:
-        return None
-    for mod_file in files:
-        if mod_file.is_primary:
-            return mod_file
-    return max(
-        files,
-        key=lambda f: (f.uploaded_timestamp or 0, f.file_id),
-    )
+    from .file_selection import select_download_file as _select
+
+    return _select(files, mod_name=mod_name)
