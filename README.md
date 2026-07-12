@@ -1,18 +1,22 @@
 # Cyberpunk 2077 模组管理器
 
+> 🌐 语言 / Language: **简体中文** | [English](./README.en.md)
+
 基于 [AgentScope](https://github.com/agentscope-ai/agentscope) 大模型 Agent 框架的赛博朋克 2077 模组管理方案，参考 [Stardrop](https://github.com/Floogen/Stardrop) 的 Nexus Mods 集成模式。
 
-## 特性
+## ✨ 功能特性
 
-- 🤖 **Agent 驱动**：自然语言或 mod_id 驱动，自动查询、安装、卸载与维护
-- 📥 **Nexus v3 集成**：模组详情、批量查询、版本解析、物化依赖、热门/追踪/活动 feed
+- 🤖 **Agent 驱动**：自然语言或 mod_id 驱动，自动查询、安装、卸载与维护；支持 SSE 流式对话与多会话管理
+- 📥 **Nexus v3 集成**：模组详情、批量查询、版本解析、物化依赖、热门 / 追踪 / 活动 feed
 - 🔗 **官方依赖解析**：v3 物化依赖 → GraphQL `nexusRequirements` → 内置社区前置表（不从描述文本推断）
-- 📦 **收藏夹安装**：解析 Nexus Collection URL，按收藏夹 pin 的**指定文件版本**批量安装
-- 🩺 **健康审查**：待安装 / 依赖不全 / 更新检测 / LLM 修复建议，可选自动修复
-- 🗂️ **可逆安装**：记录新增文件、创建目录、备份原文件，卸载时反向执行
-- 🖥️ **Web 管理页面**：侧边栏多工作区（已安装、待安装、收藏、审查、Agent、设置）
-- 🧩 **路径规则**：内置 archive / TweakXL / redscript / CET 等安装路径映射
-- 💾 **本地回退**：非 Premium 或 API 下载失败时，可从 `downloads` 目录本地压缩包安装
+- 📦 **收藏夹安装**：解析 Nexus Collection URL，按收藏夹 pin 的**指定文件版本**批量安装，支持修订变更检测
+- 🧠 **LLM 安装计划**：三种模式 `llm_first` / `hybrid` / `rules_only`，对未匹配文件由 LLM 推断目标路径，可预览后再执行
+- 🩺 **健康审查**：待安装 / 依赖不全 / 更新检测 / LLM 修复建议，可选自动修复，支持异步任务
+- 🗂️ **可逆安装**：记录新增文件、创建目录、备份原文件，卸载时反向执行；支持卸载计划预览审查
+- 🖥️ **Web 管理页面**：侧边栏多工作区（已安装、待安装、收藏、审查、Agent、设置），Vue 3 + Vite 构建
+- 🧩 **路径规则**：内置 archive / TweakXL / redscript / CET 等安装路径映射，支持多游戏配置（`game_domain` + `game_profiles/`）
+- 💾 **本地回退**：非 Premium 或 API 下载失败时，可从 `downloads` 目录本地压缩包安装，或扫描本地文件夹批量安装
+- 🌍 **多语言界面**：`ui_locale` 支持 `zh` / `en` 切换，侧栏一键切换并同步写入配置
 
 ## 快速开始
 
@@ -36,10 +40,13 @@ cp config.example.yaml config.yaml
 ```yaml
 data_dir: "D:/CyberpunkModManager/data"
 game_path: "D:/Steam/steamapps/common/Cyberpunk 2077"
+game_domain: cyberpunk2077          # Nexus 游戏域，决定加载哪套安装路径规则
 nexus_api_key: "你的 Nexus API Key"
 openai_api_key: "你的 LLM API Key"
 model_name: "gpt-4o-mini"
 openai_base_url: "https://api.openai.com/v1"
+install_plan_mode: llm_first        # llm_first | hybrid | rules_only
+ui_locale: zh                       # zh | en
 ```
 
 配置文件查找顺序：
@@ -201,8 +208,11 @@ npm run build    # 输出到 src/cyberpunk_mod_manager/web/
 | `install_mod_with_dependencies` | 安装模组并补全依赖（首选） |
 | `install_mods_batch` | 批量安装 |
 | `install_mod` | 仅安装单个模组 |
-| `install_local_mod` / `install_local_folder` | 本地安装 |
+| `preview_install_plan` | 预览 LLM 安装计划（不执行） |
+| `install_local_mod` / `install_local_folder` | 本地压缩包 / 文件夹批量安装 |
+| `scan_local_folder_tool` | 扫描本地文件夹结构 |
 | `uninstall_mod` | 卸载模组 |
+| `uninstall_mod_with_plan_review` | 卸载前预览卸载计划 |
 | `list_mods` / `list_pending_mods` / `list_incomplete_mods` | 库存列表 |
 | `check_mod_updates` | 检查 Nexus 更新 |
 | `fetch_trending_mods` / `sync_tracked_mods` / `fetch_updated_mod_feed` | Nexus 发现 |
