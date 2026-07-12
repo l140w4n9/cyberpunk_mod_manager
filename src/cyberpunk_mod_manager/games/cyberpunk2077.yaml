@@ -1,0 +1,79 @@
+# Cyberpunk 2077 默认安装档案（可被 data_dir/game_profiles/*.yaml 覆盖）
+game_domain: cyberpunk2077
+display_name: Cyberpunk 2077
+
+# 压缩包内路径以这些前缀开头时，原样安装到游戏根目录（相对路径 1:1）
+# 顺序敏感：更长、更具体的前缀在前
+preserve_prefixes:
+  - prefix: bin/x64/plugins/cyber_engine_tweaks/
+    description: CET 核心目录
+  - prefix: bin/x64/
+    description: 游戏 x64 目录（含 version.dll）
+  - prefix: red4ext/
+    description: RED4ext 插件
+  - prefix: r6/config/
+    description: redscript 用户配置
+  - prefix: r6/cache/
+    description: redscript 缓存
+  - prefix: r6/scripts/
+    description: redscript 脚本目录
+  - prefix: r6/tweaks/
+    description: TweakXL 目录
+  - prefix: archive/pc/mod/
+    description: 原生 archive 目录
+  - prefix: engine/
+    description: engine 配置
+
+# 压缩包已含完整子目录结构时保留路径
+structure_rules:
+  - pattern: archive/pc/mod/*
+    target_subpath: archive/pc/mod
+    description: 已有 archive 结构
+  - pattern: r6/scripts/*
+    target_subpath: r6/scripts
+    description: 已有 redscript 结构
+  - pattern: r6/tweaks/*
+    target_subpath: r6/tweaks
+    description: 已有 tweak 结构
+  - pattern: bin/x64/plugins/*
+    target_subpath: bin/x64/plugins
+    description: 已有 plugins 结构
+
+# 散落在压缩包根目录的单文件（按扩展名映射）
+extension_rules:
+  - pattern: "*.archive"
+    target_subpath: archive/pc/mod
+    description: 原生 archive 模组
+  - pattern: "*.xl"
+    target_subpath: archive/pc/mod
+    description: ArchiveXL 模组
+  - pattern: "*.tweak"
+    target_subpath: r6/tweaks
+    description: TweakXL 调整文件
+  - pattern: "*.yaml"
+    target_subpath: r6/tweaks
+    description: TweakXL YAML 调整
+  - pattern: "*.reds"
+    target_subpath: r6/scripts
+    description: redscript 脚本
+  - pattern: "*.lua"
+    target_subpath: bin/x64/plugins/cyber_engine_tweaks/mods
+    description: CET 用户 lua 模组
+  - pattern: user.ini
+    target_subpath: ""
+    description: 游戏根目录 user.ini
+  - pattern: bin/x64/*.ini
+    target_subpath: bin/x64
+    description: x64 INI 配置
+  - pattern: "*.ini"
+    target_subpath: ""
+    description: INI 配置文件
+
+# 安装后验收（按 Nexus mod_id，可选）
+framework_checks:
+  - name: Cyber Engine Tweaks
+    mod_ids: [107]
+    required_paths:
+      - bin/x64/version.dll
+      - bin/x64/global.ini
+      - bin/x64/plugins/cyber_engine_tweaks.asi

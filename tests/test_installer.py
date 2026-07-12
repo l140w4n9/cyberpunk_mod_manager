@@ -118,6 +118,26 @@ def test_install_preserves_red4ext_plugin_structure(tmp_path: Path) -> None:
     assert (Path(config.game_path) / xl).exists()
 
 
+def test_install_cet_framework_structure(tmp_path: Path) -> None:
+    """CET #107 框架包：version.dll 与核心脚本须在正确路径。"""
+    mod_id = _create_mod(nexus_mod_id=107)
+    archive = tmp_path / "cet.zip"
+    files = {
+        "bin/x64/version.dll": b"fake-dll",
+        "bin/x64/global.ini": b"[Global]",
+        "bin/x64/plugins/cyber_engine_tweaks.asi": b"asi",
+        "bin/x64/plugins/cyber_engine_tweaks/scripts/json/json.lua": b"return {}",
+    }
+    _make_zip(archive, files)
+
+    installer = Installer()
+    result = installer.install(mod_id, archive)
+
+    for rel in files:
+        assert rel in result.added_files
+        assert (Path(config.game_path) / rel).exists()
+
+
 def test_install_fails_when_no_rules_match(tmp_path: Path) -> None:
     mod_id = _create_mod(nexus_mod_id=55555)
     archive = tmp_path / "readme_only.zip"

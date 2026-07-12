@@ -7,6 +7,9 @@ data_dir: "D:/CyberpunkModManager/data"
 # Cyberpunk 2077 游戏安装根目录
 game_path: "D:\\Program Files (x86)\\Steam\\steamapps\\common\\Cyberpunk 2077"
 
+# Nexus 游戏域，决定加载哪套安装路径规则（见包内 games/ 或 data_dir/game_profiles/）
+game_domain: cyberpunk2077
+
 # Nexus Mods API Key
 nexus_api_key: "你的 Nexus API Key"
 
@@ -14,3 +17,6 @@ nexus_api_key: "你的 Nexus API Key"
 openai_api_key: "你的 LLM API Key"
 model_name: "gpt-4o-mini"
 openai_base_url: "https://api.openai.com/v1"
+
+# 安装计划模式：llm_first（默认，需 API Key）| hybrid | rules_only
+install_plan_mode: llm_first

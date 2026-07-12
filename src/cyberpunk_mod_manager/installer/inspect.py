@@ -8,6 +8,8 @@ import zipfile
 from pathlib import Path
 
 from .archives import _find_7z_exe, detect_archive_kind
+from .layout import build_path_normalizer
+from .profile import get_install_profile
 from .rules import match_rule, resolve_target
 
 logger = logging.getLogger(__name__)
@@ -148,28 +150,43 @@ def _build_tree_preview(entries: list[str], limit: int = _MAX_TREE_LINES) -> str
 
 def inspect_archive(archive_path: Path) -> dict:
     """检查压缩包结构并预览规则匹配结果。"""
-    entries = list_archive_entries(archive_path)
+    raw_entries = list_archive_entries(archive_path)
+    profile = get_install_profile()
+    normalizer = build_path_normalizer(raw_entries, profile.preserve_prefix_strings)
+    wrapper_strip_depth = 0
+    if raw_entries:
+        from .layout import detect_wrapper_strip_depth
+
+        wrapper_strip_depth = detect_wrapper_strip_depth(
+            raw_entries, profile.preserve_prefix_strings
+        )
+
     inspected: list[dict] = []
     matched = skipped = 0
+    normalized_entries: list[str] = []
 
-    for rel in entries:
-        rule = match_rule(rel)
+    for rel in raw_entries:
+        norm_rel = normalizer(rel)
+        normalized_entries.append(norm_rel)
+        rule = match_rule(norm_rel, profile=profile)
         if rule is None:
             skipped += 1
             inspected.append(
                 {
                     "rel": rel,
+                    "normalized_rel": norm_rel,
                     "status": "skip",
                     "target": None,
                     "rule": None,
                 }
             )
             continue
-        target = resolve_target(rel, rule)
+        target = resolve_target(norm_rel, rule)
         matched += 1
         inspected.append(
             {
                 "rel": rel,
+                "normalized_rel": norm_rel,
                 "status": "match",
                 "target": target,
                 "rule": rule.description or rule.pattern,
@@ -179,10 +196,13 @@ def inspect_archive(archive_path: Path) -> dict:
     return {
         "archive_path": str(archive_path),
         "kind": detect_archive_kind(archive_path),
-        "entry_count": len(entries),
+        "entry_count": len(raw_entries),
+        "wrapper_strip_depth": wrapper_strip_depth,
+        "game_domain": profile.game_domain,
+        "profile_source": profile.source_path,
         "entries": inspected,
         "matched_count": matched,
         "skipped_count": skipped,
-        "readme_excerpts": extract_readme_excerpts(archive_path, entries),
-        "tree_preview": _build_tree_preview(entries),
+        "readme_excerpts": extract_readme_excerpts(archive_path, raw_entries),
+        "tree_preview": _build_tree_preview(normalized_entries or raw_entries),
     }

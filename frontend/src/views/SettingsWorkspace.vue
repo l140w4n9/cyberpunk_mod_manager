@@ -7,11 +7,13 @@ const emit = defineEmits(['saved'])
 const form = ref({
   data_dir: '',
   game_path: '',
+  game_domain: 'cyberpunk2077',
   nexus_api_key: '',
   openai_api_key: '',
   model_name: 'gpt-4o-mini',
   openai_base_url: 'https://api.openai.com/v1',
   allow_adult_content: false,
+  install_plan_mode: 'llm_first',
 })
 const configFile = ref('')
 const loading = ref(true)
@@ -28,11 +30,13 @@ async function load() {
     form.value = {
       data_dir: data.data_dir || '',
       game_path: data.game_path || '',
+      game_domain: data.game_domain || 'cyberpunk2077',
       nexus_api_key: data.nexus_api_key || '',
       openai_api_key: data.openai_api_key || '',
       model_name: data.model_name || 'gpt-4o-mini',
       openai_base_url: data.openai_base_url || 'https://api.openai.com/v1',
       allow_adult_content: Boolean(data.allow_adult_content),
+      install_plan_mode: data.install_plan_mode || 'llm_first',
     }
     configFile.value = data.config_file || ''
   } catch (e) {
@@ -108,6 +112,15 @@ onMounted(load)
             placeholder="D:\Steam\steamapps\common\Cyberpunk 2077"
           />
         </div>
+        <div class="input-wrap">
+          <label>游戏档案 (game_domain)</label>
+          <input
+            v-model="form.game_domain"
+            type="text"
+            placeholder="cyberpunk2077"
+          />
+          <p class="hint">决定加载哪套路径参考规则（games/*.yaml 或 data_dir/game_profiles/）</p>
+        </div>
       </section>
 
       <section class="form-section">
@@ -135,6 +148,15 @@ onMounted(load)
         <div class="input-wrap">
           <label>API Base URL</label>
           <input v-model="form.openai_base_url" type="text" placeholder="https://api.openai.com/v1" />
+        </div>
+        <div class="input-wrap">
+          <label>安装计划模式</label>
+          <select v-model="form.install_plan_mode">
+            <option value="llm_first">大模型主导（推荐，阅读结构与说明后规划）</option>
+            <option value="hybrid">混合（规则优先，LLM 补漏）</option>
+            <option value="rules_only">仅规则（不调用 LLM）</option>
+          </select>
+          <p class="hint">需配置 API Key；llm_first 会分析压缩包目录树、readme 与 Nexus 描述后生成完整安装映射</p>
         </div>
       </section>
 

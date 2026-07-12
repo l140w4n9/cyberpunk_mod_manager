@@ -404,18 +404,32 @@ async def install_from_archive(
     except Exception as exc:
         return error_json(f"Install failed: {exc}", mod_id=mod_id)
     plan = get_uninstall_plan(internal_id)
+    verification = None
+    try:
+        from ..installer.verify import verify_installed_files
+
+        verification = verify_installed_files(
+            internal_mod_id=internal_id,
+            nexus_mod_id=mod_id,
+        )
+    except Exception:
+        verification = None
+    payload = {
+        "mod_id": mod_id,
+        "internal_id": internal_id,
+        "source": "local",
+        "local_path": str(archive_path),
+        "added_files_count": len(result.added_files),
+        "skipped": result.skipped,
+        "plan_source": plan_source,
+        "install_plan": install_plan_preview,
+        "uninstall_plan_preview": plan.to_dict() if plan else None,
+        "install_verification": verification,
+    }
+    if verification and not verification.get("ok"):
+        payload["install_warning"] = "; ".join(verification.get("warnings") or [])
     return json.dumps(
-        {
-            "mod_id": mod_id,
-            "internal_id": internal_id,
-            "source": "local",
-            "local_path": str(archive_path),
-            "added_files_count": len(result.added_files),
-            "skipped": result.skipped,
-            "plan_source": plan_source,
-            "install_plan": install_plan_preview,
-            "uninstall_plan_preview": plan.to_dict() if plan else None,
-        },
+        payload,
         ensure_ascii=False,
     )
 

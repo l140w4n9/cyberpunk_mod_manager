@@ -57,6 +57,22 @@ def test_match_ini_at_root() -> None:
     assert resolve_target("folder/config.ini", rule) == "config.ini"
 
 
+def test_match_cet_framework_structure() -> None:
+    """CET 框架包须保留 bin/x64 完整目录树（含 version.dll）。"""
+    files = [
+        "bin/x64/version.dll",
+        "bin/x64/global.ini",
+        "bin/x64/LICENSE",
+        "bin/x64/plugins/cyber_engine_tweaks.asi",
+        "bin/x64/plugins/cyber_engine_tweaks/scripts/json/json.lua",
+        "bin/x64/plugins/cyber_engine_tweaks/config.json",
+    ]
+    for rel in files:
+        rule = match_rule(rel)
+        assert rule is not None, rel
+        assert resolve_target(rel, rule) == rel, rel
+
+
 def test_match_red4ext_archivexl_structure() -> None:
     dll = "red4ext/plugins/ArchiveXL/ArchiveXL.dll"
     xl = "red4ext/plugins/ArchiveXL/Bundle/Migration.xl"

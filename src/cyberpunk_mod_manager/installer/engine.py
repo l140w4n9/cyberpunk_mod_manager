@@ -31,6 +31,8 @@ from ..config import config
 from ..models import Mod, ModStatus, InstallRecord
 from ..storage.db import get_session
 from .archives import extract_archive
+from .layout import build_path_normalizer
+from .profile import get_install_profile
 from .rules import match_rule, resolve_target
 
 
@@ -55,14 +57,17 @@ class Installer:
         self,
         rel_to_extract: str,
         file_mappings: dict[str, str] | None,
+        *,
+        normalizer=None,
     ) -> str | None:
         rel = rel_to_extract.replace("\\", "/")
         if file_mappings is not None and rel in file_mappings:
             return file_mappings[rel]
-        rule = match_rule(rel)
+        norm = normalizer(rel) if normalizer else rel
+        rule = match_rule(norm)
         if rule is None:
             return None
-        return resolve_target(rel, rule)
+        return resolve_target(norm, rule)
 
     def install(
         self,
@@ -92,6 +97,17 @@ class Installer:
             extract_archive(archive_path, tmp_dir)
 
             game_root = self.game_path.resolve()
+            all_rels: list[str] = []
+            for root, _dirs, files in os.walk(tmp_dir):
+                root_path = Path(root)
+                for fname in files:
+                    all_rels.append(
+                        (root_path / fname).relative_to(tmp_dir).as_posix()
+                    )
+            profile = get_install_profile()
+            normalizer = build_path_normalizer(
+                all_rels, profile.preserve_prefix_strings
+            )
 
             # 遍历解压后的文件
             for root, _dirs, files in os.walk(tmp_dir):
@@ -105,7 +121,11 @@ class Installer:
                             continue
                         target_rel = file_mappings[rel_to_extract]
                     else:
-                        target_rel = self._resolve_target(rel_to_extract, None)
+                        target_rel = self._resolve_target(
+                            rel_to_extract,
+                            None,
+                            normalizer=normalizer,
+                        )
                         if target_rel is None:
                             result.skipped.append(rel_to_extract)
                             continue

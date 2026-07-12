@@ -165,6 +165,8 @@ class AppConfig(BaseModel):
     data_dir: str = ""
     # Cyberpunk 2077 游戏安装根目录
     game_path: str = r"C:\Program Files (x86)\Steam\steamapps\common\Cyberpunk 2077"
+    # Nexus 游戏域 / 安装档案名（对应 games/{game_domain}.yaml）
+    game_domain: str = "cyberpunk2077"
     # Nexus Mods API Key
     nexus_api_key: str = ""
     # LLM 配置
@@ -175,6 +177,8 @@ class AppConfig(BaseModel):
     app_name: str = "CyberpunkModManager"
     # 是否允许通过 Nexus API 自动下载成人内容模组（默认关闭）
     allow_adult_content: bool = False
+    # 安装计划：llm_first=大模型主导 | hybrid=规则+LLM补漏 | rules_only=仅规则
+    install_plan_mode: str = "llm_first"
     # 已加载的配置文件路径（便于调试）
     config_file: str = ""
 
@@ -221,11 +225,13 @@ class AppConfig(BaseModel):
         return {
             "data_dir": self.data_dir,
             "game_path": self.game_path,
+            "game_domain": self.game_domain,
             "nexus_api_key": self.nexus_api_key,
             "openai_api_key": self.openai_api_key,
             "model_name": self.model_name,
             "openai_base_url": self.openai_base_url,
             "allow_adult_content": self.allow_adult_content,
+            "install_plan_mode": self.install_plan_mode,
             "config_file": self.config_file,
             "has_data_dir": self.has_data_dir,
             "downloads_dir": str(self.downloads_dir) if self.has_data_dir else "",
@@ -281,6 +287,10 @@ def save_config(values: dict[str, Any]) -> Path:
         "openai_base_url": str(values.get("openai_base_url", "https://api.openai.com/v1")).strip()
         or "https://api.openai.com/v1",
         "allow_adult_content": bool(values.get("allow_adult_content", False)),
+        "game_domain": str(values.get("game_domain", "cyberpunk2077")).strip()
+        or "cyberpunk2077",
+        "install_plan_mode": str(values.get("install_plan_mode", "llm_first")).strip()
+        or "llm_first",
     }
 
     path = resolve_config_write_path(config.config_file)
@@ -298,6 +308,9 @@ def save_config(values: dict[str, Any]) -> Path:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
     reload_config()
+    from cyberpunk_mod_manager.installer.profile import reload_install_profile
+
+    reload_install_profile()
     if config.config_file == "":
         config.config_file = str(path)
     return path
