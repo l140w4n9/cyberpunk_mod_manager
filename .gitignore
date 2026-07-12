@@ -61,3 +61,6 @@ frontend/dist/
 workspaces/
 
 output.txt
+
+/docs
+frontend/src/assets

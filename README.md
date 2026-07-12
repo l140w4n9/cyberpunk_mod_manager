@@ -113,6 +113,22 @@ When the Nexus API refuses download (non-Premium, etc.):
 2. Place it in `data_dir/downloads/` (filename should contain the mod_id, e.g. `27967_xxx.zip`)
 3. Use "Install local archive" on the web page, or have the Agent call `install_local_mod`
 
+### Premium vs. non-Premium functionality
+
+The application adapts to the user's Nexus account tier. **Direct API downloads require a Premium account**; non-Premium users get the full metadata/audit experience but must download archives manually.
+
+| Feature | Premium | Non-Premium |
+|---------|:-------:|:-----------:|
+| Mod search & details | ✅ | ✅ |
+| Dependency resolution | ✅ | ✅ |
+| Health audit & update detection | ✅ | ✅ |
+| Trending / tracked / activity feed | ✅ | ✅ |
+| **Direct API download** | ✅ | ❌ |
+| **Collection batch auto-download** | ✅ | ❌ (manual download) |
+| **Install from local archive** | ✅ | ✅ |
+
+The sidebar footer shows the user's Premium status (via `validate.json`) so users know which features are available.
+
 ## Nexus API architecture (v3)
 
 The main client `nexus/client.py` uses **v3 REST + GraphQL**:

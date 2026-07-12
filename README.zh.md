@@ -113,6 +113,22 @@ npm run build    # 输出到 src/cyberpunk_mod_manager/web/
 2. 放入 `data_dir/downloads/`（文件名建议含 mod_id，如 `27967_xxx.zip`）
 3. 在 Web 页使用「本地压缩包安装」，或让 Agent 调用 `install_local_mod`
 
+### Premium 与非 Premium 功能差异
+
+应用会根据用户的 Nexus 账户等级自动适配。**直接通过 API 下载需要 Premium 账户**；非 Premium 用户可使用全部元数据/审查功能，但需手动下载压缩包后安装。
+
+| 功能 | Premium | 非 Premium |
+|------|:-------:|:----------:|
+| 模组搜索与详情 | ✅ | ✅ |
+| 依赖解析 | ✅ | ✅ |
+| 健康审查与更新检测 | ✅ | ✅ |
+| 热门 / 追踪 / 活动 feed | ✅ | ✅ |
+| **直接 API 下载** | ✅ | ❌ |
+| **收藏夹批量自动下载** | ✅ | ❌（需手动下载） |
+| **从本地压缩包安装** | ✅ | ✅ |
+
+侧边栏底部会显示用户的 Premium 状态（通过 `validate.json` 获取），方便用户了解当前可用功能。
+
 ## Nexus API 架构（v3）
 
 主客户端 `nexus/client.py` 使用 **v3 REST + GraphQL**：
