@@ -1,6 +1,6 @@
 # Cyberpunk 2077 Mod Manager
 
-> 🌐 Language / 语言: **English** | [简体中文](./README.md)
+> 🌐 Language / 语言: **English** | [简体中文](./README.zh.md)
 
 An LLM-powered mod manager for Cyberpunk 2077 built on the [AgentScope](https://github.com/agentscope-ai/agentscope) agent framework, inspired by [Stardrop](https://github.com/Floogen/Stardrop)'s Nexus Mods integration.
 
