@@ -186,6 +186,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  collectionQueueStatus: (modIds) =>
+    request('/api/collections/queue-status', {
+      method: 'POST',
+      body: JSON.stringify({ mod_ids: modIds }),
+    }),
   getCollectionJob: (jobId, options = {}) =>
     request(`/api/collections/jobs/${jobId}`, { timeoutMs: 10000, ...options }),
   cancelCollectionJob: (jobId) =>

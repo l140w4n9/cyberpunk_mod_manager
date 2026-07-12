@@ -250,17 +250,47 @@ async function restoreState() {
 
 function selectedModIds() {
   return queue.value
-    .filter((item) => item.selected)
+    .filter((item) => item.selected && !item.installed)
     .map((item) => item.mod_id)
+}
+
+function recomputeStats() {
+  if (!stats.value) return
+  const total = queue.value.length
+  const installed = queue.value.filter((item) => item.installed).length
+  const pending = queue.value.filter((item) => item.selected && !item.installed).length
+  const optional = queue.value.filter((item) => item.optional).length
+  const selected = queue.value.filter((item) => item.selected && !item.installed).length
+  stats.value = { ...stats.value, total, installed, pending, optional, selected }
+}
+
+function applyInstallStatusRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return
+  const byId = Object.fromEntries(rows.map((row) => [row.mod_id, row]))
+  queue.value = queue.value.map((item) => {
+    const row = byId[item.mod_id]
+    if (!row) return item
+    const installed = Boolean(row.installed)
+    if (!installed) {
+      return { ...item, installed: false }
+    }
+    return {
+      ...item,
+      installed: true,
+      selected: false,
+      status: item.status === 'pending' ? 'skipped' : item.status,
+      message: item.message || '已安装，将跳过',
+    }
+  })
+  recomputeStats()
+  schedulePersistState()
 }
 
 function resetQueueForInstall(modIds) {
   const idSet = new Set(modIds)
   queue.value = queue.value.map((item) => {
     if (!idSet.has(item.mod_id)) return item
-    if (item.installed) {
-      return { ...item, status: 'pending', message: '已安装，将跳过' }
-    }
+    if (item.installed) return item
     return { ...item, status: 'pending', message: '' }
   })
 }
@@ -290,9 +320,15 @@ async function checkRevisionChange() {
 
 async function startInstall() {
   if (!collection.value) return
+  try {
+    const statusData = await api.collectionQueueStatus(queue.value.map((item) => item.mod_id))
+    applyInstallStatusRows(statusData.mods || [])
+  } catch {
+    /* 状态刷新失败时仍尝试安装，后端会跳过已装项 */
+  }
   const modIds = selectedModIds()
   if (!modIds.length) {
-    parseError.value = '请至少选择一个模组'
+    parseError.value = '没有待安装的模组（已安装的将自动跳过）'
     return
   }
   parseError.value = ''
@@ -345,8 +381,18 @@ function syncQueueFromJob(jobItems) {
   queue.value = queue.value.map((item) => {
     const latest = byId[item.mod_id]
     if (!latest) return item
-    return { ...item, ...latest }
+    const merged = { ...item, ...latest }
+    if (latest.status === 'success' || latest.installed) {
+      merged.installed = true
+      merged.selected = false
+    }
+    if (latest.status === 'skipped' && latest.message?.includes('已安装')) {
+      merged.installed = true
+      merged.selected = false
+    }
+    return merged
   })
+  recomputeStats()
 }
 
 function onQueueSelectionChange() {

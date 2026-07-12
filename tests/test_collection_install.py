@@ -92,6 +92,51 @@ async def test_collection_install_job_continues_after_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collection_install_skips_installed_without_api_call() -> None:
+    """已安装模组应在任务启动时直接标记跳过，不调用安装接口。"""
+    init_db()
+    from cyberpunk_mod_manager.services import mod_ops
+
+    mod_ops.get_or_create_mod_stub(100, "Installed A")
+    with get_session() as session:
+        mod = session.exec(select(Mod).where(Mod.nexus_mod_id == 100)).first()
+        mod.status = ModStatus.INSTALLED
+        session.add(mod)
+        session.commit()
+
+    install_mock = AsyncMock(
+        return_value=json.dumps({"mod_id": 300, "added_files_count": 1})
+    )
+    with patch(
+        "cyberpunk_mod_manager.services.collection_ops.asyncio.create_task"
+    ), patch.object(mod_ops, "install_mod_with_dependencies", new=install_mock):
+        job_id = await collection_ops.start_collection_install(
+            slug="iszwwe",
+            domain="cyberpunk2077",
+            title="Test Collection",
+            mod_ids=[100, 300],
+        )
+        collection_ops._jobs[job_id].state = "pending"
+        await collection_ops._run_job(
+            job_id, install_dependencies=True, skip_installed=True
+        )
+
+    job = collection_ops.get_job(job_id)
+    by_id = {item.mod_id: item for item in job.items}
+    assert by_id[100].status == QueueItemStatus.SKIPPED.value
+    assert by_id[100].installed is True
+    assert by_id[300].status == QueueItemStatus.SUCCESS.value
+    install_mock.assert_awaited_once()
+    install_mock.assert_awaited_with(
+        300,
+        install_dependencies=True,
+        allow_local_fallback=True,
+        skip_installed=True,
+        pin=None,
+    )
+
+
+@pytest.mark.asyncio
 async def test_parse_marks_installed_mods() -> None:
     init_db()
     from cyberpunk_mod_manager.services import mod_ops
@@ -113,4 +158,7 @@ async def test_parse_marks_installed_mods() -> None:
 
     first = next(item for item in data["queue"] if item["mod_id"] == 100)
     assert first["installed"] is True
+    assert first["selected"] is False
+    assert first["status"] == QueueItemStatus.SKIPPED.value
     assert "跳过" in first["message"]
+    assert data["stats"]["pending"] == 1

@@ -143,6 +143,31 @@ def _job_stats(items: list[QueueItem]) -> dict[str, int]:
     }
 
 
+def _apply_installed_skip(
+    items: list[QueueItem],
+    *,
+    skip_installed: bool,
+) -> None:
+    """将已安装模组标记为跳过，避免重复进入安装流程。"""
+    if not skip_installed:
+        return
+    mod_ids = [item.mod_id for item in items if item.selected]
+    if not mod_ids:
+        return
+    status_map = mod_ops.batch_mod_status_info(mod_ids)
+    for item in items:
+        if not item.selected:
+            continue
+        _status, installed = status_map.get(
+            item.mod_id, (ModStatus.NOT_INSTALLED.value, False)
+        )
+        if not installed:
+            continue
+        item.installed = True
+        item.status = QueueItemStatus.SKIPPED.value
+        item.message = "已安装，已跳过"
+
+
 async def parse_collection_url_to_queue(url: str) -> dict[str, Any]:
     """解析 URL 并生成安装队列预览。"""
     parsed = parse_collection_url(url)
@@ -164,9 +189,13 @@ async def parse_collection_url_to_queue(url: str) -> dict[str, Any]:
                 name=entry.name,
                 order=entry.order,
                 optional=entry.optional,
-                selected=not entry.optional,
+                selected=not entry.optional and not installed,
                 installed=installed,
-                status=QueueItemStatus.PENDING.value,
+                status=(
+                    QueueItemStatus.SKIPPED.value
+                    if installed
+                    else QueueItemStatus.PENDING.value
+                ),
                 message="已安装，将跳过" if installed else "",
                 collection_file_id=entry.collection_file_id,
                 collection_version_id=entry.collection_version_id,
@@ -246,6 +275,7 @@ async def start_collection_install(
         created_at=_utc_now(),
         updated_at=_utc_now(),
     )
+    _apply_installed_skip(job.items, skip_installed=skip_installed)
     async with _jobs_lock:
         _jobs[job_id] = job
 
@@ -275,6 +305,7 @@ async def _run_job(
 
     job.state = JobState.RUNNING.value
     job.updated_at = _utc_now()
+    _apply_installed_skip(job.items, skip_installed=skip_installed)
     state_lock = asyncio.Lock()
 
     async def process_item(item: QueueItem) -> None:
@@ -284,10 +315,7 @@ async def _run_job(
             item.status = QueueItemStatus.CANCELLED.value
             item.message = "已取消"
             return
-        if item.status not in (
-            QueueItemStatus.PENDING.value,
-            QueueItemStatus.SKIPPED.value,
-        ):
+        if item.status != QueueItemStatus.PENDING.value:
             return
 
         async with state_lock:
@@ -317,12 +345,15 @@ async def _run_job(
             if data.get("skipped"):
                 item.status = QueueItemStatus.SKIPPED.value
                 item.message = data.get("message") or "已安装，已跳过"
+                if data.get("reason") == "already_installed":
+                    item.installed = True
             elif data.get("error"):
                 item.status = QueueItemStatus.FAILED.value
                 item.message = str(data.get("error"))
             else:
                 item.status = QueueItemStatus.SUCCESS.value
                 item.message = "安装完成"
+                item.installed = True
         except Exception as exc:
             item.status = QueueItemStatus.FAILED.value
             item.message = str(exc)
@@ -340,6 +371,26 @@ async def _run_job(
         JobState.CANCELLED.value if job.cancel_requested else JobState.DONE.value
     )
     job.updated_at = _utc_now()
+
+
+def refresh_queue_install_status(mod_ids: list[int]) -> list[dict[str, Any]]:
+    """批量查询本地库存中的安装状态（供收藏夹队列刷新）。"""
+    if not mod_ids:
+        return []
+    status_map = mod_ops.batch_mod_status_info(mod_ids)
+    rows: list[dict[str, Any]] = []
+    for mod_id in mod_ids:
+        status, installed = status_map.get(
+            mod_id, (ModStatus.NOT_INSTALLED.value, False)
+        )
+        rows.append(
+            {
+                "mod_id": mod_id,
+                "status": status,
+                "installed": installed,
+            }
+        )
+    return rows
 
 
 def cancel_job(job_id: str) -> bool:

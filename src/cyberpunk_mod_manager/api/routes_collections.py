@@ -37,6 +37,10 @@ class CollectionInstallRequest(BaseModel):
     skip_installed: bool = True
 
 
+class CollectionQueueStatusRequest(BaseModel):
+    mod_ids: list[int] = Field(..., min_length=1)
+
+
 @router.post("/parse")
 async def parse_collection(req: CollectionParseRequest) -> dict:
     """解析收藏夹 URL，生成安装队列预览。"""
@@ -61,6 +65,14 @@ async def parse_collection(req: CollectionParseRequest) -> dict:
         len(result.get("queue") or []),
     )
     return result
+
+
+@router.post("/queue-status")
+async def collection_queue_status(req: CollectionQueueStatusRequest) -> dict:
+    """批量刷新收藏夹队列项的本地安装状态。"""
+    _ensure_data_dir()
+    rows = collection_ops.refresh_queue_install_status(req.mod_ids)
+    return {"count": len(rows), "mods": rows}
 
 
 @router.post("/install")
