@@ -1,5 +1,5 @@
 <script setup>
-import { ref, nextTick, onMounted } from 'vue'
+import { computed, ref, nextTick, onMounted } from 'vue'
 import { api } from '../api/client'
 import {
   createTool,
@@ -15,26 +15,28 @@ import {
 import { consumeAgentHandoff } from '../utils/agentHandoff'
 import ToolStep from '../components/agent/ToolStep.vue'
 import TraceInspector from '../components/agent/TraceInspector.vue'
+import { useI18n } from '../i18n'
 
 const emit = defineEmits(['done'])
+
+const { t } = useI18n()
 
 const props = defineProps({
   health: {
     type: Object,
-    default: () => ({ ready: false, label: '检查中...', llm_configured: false, config_file: '' }),
+    default: () => ({ ready: false, label: '', llm_configured: false, config_file: '' }),
   },
 })
 
-const WELCOME = {
+const welcomeMessage = computed(() => ({
   id: 'welcome',
   role: 'assistant',
-  content:
-    '你好！我是模组管理 Agent。给我一个 Nexus 模组 ID 或自然语言指令，我会展示完整的工具调用过程并自动安装。',
-}
+  content: t('agent.greeting'),
+}))
 
 const sessions = ref([])
 const activeSessionId = ref(null)
-const messages = ref([WELCOME])
+const messages = ref([welcomeMessage.value])
 const input = ref('')
 const sending = ref(false)
 const selectedTool = ref(null)
@@ -74,7 +76,7 @@ async function loadSession(sessionId) {
   const data = await api.getSession(sessionId)
   activeSessionId.value = sessionId
   setActiveSessionId(sessionId)
-  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  messages.value = data.messages?.length ? data.messages : [welcomeMessage.value]
   selectedTool.value = null
   selectedTurn.value = null
   await scrollToBottom()
@@ -85,7 +87,7 @@ async function ensureSession() {
   const data = await api.createSession()
   activeSessionId.value = data.id
   setActiveSessionId(data.id)
-  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  messages.value = data.messages?.length ? data.messages : [welcomeMessage.value]
   await refreshSessions()
   return data.id
 }
@@ -94,7 +96,7 @@ async function startNewSession() {
   const data = await api.createSession()
   activeSessionId.value = data.id
   setActiveSessionId(data.id)
-  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  messages.value = data.messages?.length ? data.messages : [welcomeMessage.value]
   selectedTool.value = null
   selectedTurn.value = null
   await refreshSessions()
@@ -166,7 +168,7 @@ function handleStreamEvent(turn, event, data) {
     selectedTurn.value = turn
     selectedTool.value = null
   } else if (event === 'error') {
-    turn.reply = '出错: ' + (data.message || '未知错误')
+    turn.reply = t('agent.error', { error: data.message || t('agent.unknownError') })
     turn.status = 'error'
     turn.loading = false
     turn.endedAt = Date.now()
@@ -186,7 +188,7 @@ async function sendMessage(rawMsg) {
       id: `e-${Date.now()}`,
       role: 'assistant',
       content:
-        'LLM 未配置，无法运行 Agent。请编辑 config.yaml 填入 openai_api_key 后重启服务。',
+        t('agent.llmRequired'),
     })
     if (typeof rawMsg !== 'string') input.value = ''
     return false
@@ -229,13 +231,13 @@ async function sendMessage(rawMsg) {
       turn.status = turn.status === 'running' ? 'done' : turn.status
       turn.endedAt = Date.now()
     }
-    if (!turn.reply && !turn.tools.length) turn.reply = '（无回复）'
+    if (!turn.reply && !turn.tools.length) turn.reply = t('agent.noReply')
     await persistMessages()
     emit('done')
   } catch (e) {
     turn.loading = false
     turn.status = 'error'
-    turn.reply = '出错: ' + e.message
+    turn.reply = t('agent.error', { error: e.message })
     turn.endedAt = Date.now()
     await persistMessages()
   } finally {
@@ -253,10 +255,10 @@ async function applyPendingHandoff() {
   const handoff = consumeAgentHandoff()
   if (!handoff?.message) return false
 
-  const data = await api.createSession(handoff.title || '健康审查处理')
+  const data = await api.createSession(handoff.title || t('maintenance.handoffTitle'))
   activeSessionId.value = data.id
   setActiveSessionId(data.id)
-  messages.value = data.messages?.length ? data.messages : [WELCOME]
+  messages.value = data.messages?.length ? data.messages : [welcomeMessage.value]
   selectedTool.value = null
   selectedTurn.value = null
   await refreshSessions()
@@ -279,7 +281,7 @@ onMounted(async () => {
       await startNewSession()
     }
   } catch {
-    messages.value = [WELCOME]
+    messages.value = [welcomeMessage.value]
   } finally {
     sessionsLoading.value = false
   }
@@ -290,11 +292,11 @@ onMounted(async () => {
   <div class="workspace">
     <aside class="session-panel">
       <div class="session-header">
-        <span class="session-title">会话</span>
-        <button class="btn-ghost btn-sm" type="button" @click="startNewSession">+ 新建</button>
+        <span class="session-title">{{ t('agent.session') }}</span>
+        <button class="btn-ghost btn-sm" type="button" @click="startNewSession">{{ t('agent.newSession') }}</button>
       </div>
-      <div v-if="sessionsLoading" class="session-empty">加载中...</div>
-      <div v-else-if="!sessions.length" class="session-empty">暂无会话</div>
+      <div v-if="sessionsLoading" class="session-empty">{{ t('agent.loading') }}</div>
+      <div v-else-if="!sessions.length" class="session-empty">{{ t('agent.noSessions') }}</div>
       <ul v-else class="session-list">
         <li
           v-for="s in sessions"
@@ -304,17 +306,17 @@ onMounted(async () => {
           @click="switchSession(s.id)"
         >
           <div class="session-item-top">
-            <span class="session-name">{{ s.title || '新会话' }}</span>
+            <span class="session-name">{{ s.title || t('agent.newChat') }}</span>
             <button
               class="session-del"
               type="button"
-              title="删除会话"
+              :title="t('agent.deleteSession')"
               @click.stop="removeSession(s.id)"
             >
               ×
             </button>
           </div>
-          <div class="session-preview">{{ s.preview || '（空）' }}</div>
+          <div class="session-preview">{{ s.preview || t('agent.emptyPreview') }}</div>
           <div class="session-time mono">{{ formatSessionTime(s.updated_at) }}</div>
         </li>
       </ul>
@@ -323,23 +325,25 @@ onMounted(async () => {
     <div class="workspace-main">
       <header class="workspace-header">
         <div>
-          <h2>Agent 运行</h2>
-          <p>实时展示 LLM 推理与工具调用全过程</p>
+          <h2>{{ t('agent.title') }}</h2>
+          <p>{{ t('agent.subtitle') }}</p>
         </div>
         <div v-if="sending" class="run-badge">
-          <span class="spinner" /> 运行中
+          <span class="spinner" /> {{ t('agent.running') }}
         </div>
       </header>
 
       <div v-if="!health.data_dir_configured" class="config-alert warn-box">
-        <strong>数据目录未配置</strong>
-        <p>请先在侧栏打开「设置」，填写<strong>数据存放目录</strong>（必填）后保存。</p>
+        <strong>{{ t('agent.noDataDir') }}</strong>
+        <p>{{ t('agent.noDataDirHint') }}</p>
       </div>
 
       <div v-else-if="!health.llm_configured" class="config-alert">
-        <strong>LLM 未配置</strong>
-        <p>请在侧栏「设置」页填入 LLM API Key，或编辑 config.yaml。</p>
-        <p v-if="health.config_file" class="mono">当前配置: {{ health.config_file || '（未找到配置文件）' }}</p>
+        <strong>{{ t('agent.noLlm') }}</strong>
+        <p>{{ t('agent.noLlmHint') }}</p>
+        <p v-if="health.config_file" class="mono">
+          {{ t('agent.configFile', { path: health.config_file || t('agent.configNotFound') }) }}
+        </p>
       </div>
 
       <div ref="logRef" class="timeline-scroll">
@@ -359,16 +363,16 @@ onMounted(async () => {
               <div class="msg-avatar agent">A</div>
               <div class="turn-panel">
                 <div class="turn-header">
-                  <span class="turn-label">Agent 执行流程</span>
+                  <span class="turn-label">{{ t('agent.turnLabel') }}</span>
                   <span class="turn-status" :class="msg.status">
                     {{
                       msg.status === 'running'
                         ? msg.phase === 'reply'
-                          ? '生成回复'
-                          : '调用工具'
+                          ? t('agent.generating')
+                          : t('agent.callingTool')
                         : msg.status === 'error'
-                          ? '失败'
-                          : '完成'
+                          ? t('agent.failed')
+                          : t('agent.done')
                     }}
                   </span>
                 </div>
@@ -386,11 +390,11 @@ onMounted(async () => {
                 </div>
 
                 <div v-else-if="msg.loading" class="turn-waiting">
-                  <span class="spinner" /> 等待 Agent 决策...
+                  <span class="spinner" /> {{ t('agent.waiting') }}
                 </div>
 
                 <div v-if="msg.reply" class="reply-block">
-                  <div class="reply-label">最终回复</div>
+                  <div class="reply-label">{{ t('agent.finalReply') }}</div>
                   <div class="reply-text">
                     {{ msg.reply }}<span v-if="msg.loading && msg.phase === 'reply'" class="cursor">▍</span>
                   </div>
@@ -405,12 +409,12 @@ onMounted(async () => {
         <textarea
           v-model="input"
           rows="2"
-          placeholder="输入模组 ID（如 27967）或：帮我安装 0-Engine 及依赖..."
+          :placeholder="t('agent.placeholder')"
           :disabled="sending"
           @keydown.enter.exact.prevent="send"
         />
         <button class="btn-primary" type="submit" :disabled="sending || !input.trim()">
-          {{ sending ? '运行中' : '发送' }}
+          {{ sending ? t('agent.running') : t('agent.send') }}
         </button>
       </form>
     </div>

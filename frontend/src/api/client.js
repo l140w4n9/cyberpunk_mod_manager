@@ -1,9 +1,25 @@
+import { REQUEST_CANCELLED, i18nState, statusLabel, t, toolStateLabel } from '../i18n'
+
+function localeHeaders() {
+  const locale = i18nState.locale
+  return {
+    'X-Locale': locale,
+    'Accept-Language': locale === 'en' ? 'en-US' : 'zh-CN',
+  }
+}
+
 function formatNetworkError(error) {
   if (error?.name === 'AbortError') {
-    return '请求已取消'
+    return t('api.requestCancelled')
   }
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8000'
-  return `无法连接后端服务（${origin}），请确认已运行 python -m cyberpunk_mod_manager 并保持窗口打开`
+  return t('api.connectionFailed', { origin })
+}
+
+function cancelledError() {
+  const err = new Error(t('api.requestCancelled'))
+  err.code = REQUEST_CANCELLED
+  return err
 }
 
 async function request(url, options = {}) {
@@ -30,7 +46,11 @@ async function request(url, options = {}) {
   let resp
   try {
     resp = await fetch(url, {
-      headers: { 'Content-Type': 'application/json', ...fetchOptions.headers },
+      headers: {
+        'Content-Type': 'application/json',
+        ...localeHeaders(),
+        ...fetchOptions.headers,
+      },
       ...fetchOptions,
       signal: controller.signal,
     })
@@ -38,10 +58,10 @@ async function request(url, options = {}) {
     if (error?.name === 'AbortError') {
       if (timedOut) {
         throw new Error(
-          `请求超时（${Math.round(timeoutMs / 1000)}s），请确认已运行 python -m cyberpunk_mod_manager 且能打开 /api/health`,
+          t('api.requestTimeout', { seconds: Math.round(timeoutMs / 1000) }),
         )
       }
-      throw new Error('请求已取消')
+      throw cancelledError()
     }
     const message =
       error?.message === 'Failed to fetch'
@@ -95,7 +115,10 @@ export async function chatStream(message, onEvent, sessionId = null) {
   try {
     resp = await fetch('/api/agent/chat/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...localeHeaders(),
+      },
       body: JSON.stringify({ message, session_id: sessionId }),
     })
   } catch (error) {
@@ -277,22 +300,22 @@ export const api = {
 }
 
 export const STATUS_LABELS = {
-  installed: '已安装',
-  downloaded: '已下载',
-  not_installed: '未安装',
-  disabled: '已禁用',
-  error: '错误',
+  get installed() { return statusLabel('installed') },
+  get downloaded() { return statusLabel('downloaded') },
+  get not_installed() { return statusLabel('not_installed') },
+  get disabled() { return statusLabel('disabled') },
+  get error() { return statusLabel('error') },
 }
 
 export const TOOL_STATE_LABELS = {
-  running: '执行中',
-  done: '完成',
-  success: '完成',
-  SUCCESS: '完成',
-  ERROR: '失败',
-  error: '失败',
-  INTERRUPTED: '中断',
-  interrupted: '中断',
-  DENIED: '已拒绝',
-  denied: '已拒绝',
+  get running() { return toolStateLabel('running') },
+  get done() { return toolStateLabel('done') },
+  get success() { return toolStateLabel('success') },
+  get SUCCESS() { return toolStateLabel('SUCCESS') },
+  get ERROR() { return toolStateLabel('ERROR') },
+  get error() { return toolStateLabel('error') },
+  get INTERRUPTED() { return toolStateLabel('INTERRUPTED') },
+  get interrupted() { return toolStateLabel('interrupted') },
+  get DENIED() { return toolStateLabel('DENIED') },
+  get denied() { return toolStateLabel('denied') },
 }

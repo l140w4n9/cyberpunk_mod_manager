@@ -10,6 +10,7 @@ from typing import Any, Literal
 import httpx
 
 from ..config import config
+from ..locale import effective_locale, normalize_locale
 from ..installer.inspect import inspect_archive
 from ..installer.profile import get_install_profile
 from .summary import (
@@ -390,22 +391,40 @@ async def explain_uninstall_plan(
     plan: dict,
     *,
     mod_name: str = "",
+    locale: str | None = None,
 ) -> str:
     """用 LLM 解读卸载计划（执行前向用户说明）。"""
+    loc = effective_locale(locale)
+    added = plan.get("added_files") or []
+    backed = plan.get("backed_up_files") or []
     if not config.openai_api_key:
-        added = plan.get("added_files") or []
-        backed = plan.get("backed_up_files") or []
+        if loc == "en":
+            return (
+                f"Will remove {len(added)} added file(s) and "
+                f"restore {len(backed)} backed-up original file(s)."
+            )
         return (
             f"将删除 {len(added)} 个新增文件，"
             f"恢复 {len(backed)} 个被覆盖的原始文件。"
         )
 
-    prompt = (
-        "你是赛博朋克2077模组助手。根据以下卸载计划，用中文简要说明将执行的操作"
-        "（删除哪些路径、恢复哪些备份），3-6 条 bullet，不要执行任何操作：\n"
-        f"模组：{mod_name or mod_id} (#{mod_id})\n"
-        f"计划 JSON：{json.dumps(plan, ensure_ascii=False)[:6000]}"
-    )
+    if loc == "en":
+        prompt = (
+            "You are a Cyberpunk 2077 mod assistant. Based on the uninstall plan below, "
+            "briefly explain what will happen (which paths are removed, which backups restored) "
+            "in 3-6 bullet points. Do not perform any action:\n"
+            f"Mod: {mod_name or mod_id} (#{mod_id})\n"
+            f"Plan JSON: {json.dumps(plan, ensure_ascii=False)[:6000]}"
+        )
+        empty = "(no explanation)"
+    else:
+        prompt = (
+            "你是赛博朋克2077模组助手。根据以下卸载计划，用中文简要说明将执行的操作"
+            "（删除哪些路径、恢复哪些备份），3-6 条 bullet，不要执行任何操作：\n"
+            f"模组：{mod_name or mod_id} (#{mod_id})\n"
+            f"计划 JSON：{json.dumps(plan, ensure_ascii=False)[:6000]}"
+        )
+        empty = "（无解读）"
     url = f"{config.openai_base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {config.openai_api_key}",
@@ -424,4 +443,4 @@ async def explain_uninstall_plan(
         data = _parse_chat_response(resp)
     from .summary import extract_llm_message_text
 
-    return extract_llm_message_text(data, full_reasoning=False) or "（无解读）"
+    return extract_llm_message_text(data, full_reasoning=False) or empty

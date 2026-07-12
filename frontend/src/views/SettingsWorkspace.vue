@@ -1,8 +1,11 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { api } from '../api/client'
+import { i18nState, setLocale, useI18n } from '../i18n'
 
 const emit = defineEmits(['saved'])
+
+const { t } = useI18n()
 
 const form = ref({
   data_dir: '',
@@ -14,6 +17,7 @@ const form = ref({
   openai_base_url: 'https://api.openai.com/v1',
   allow_adult_content: false,
   install_plan_mode: 'llm_first',
+  ui_locale: 'zh',
 })
 const configFile = ref('')
 const loading = ref(true)
@@ -37,12 +41,16 @@ async function load() {
       openai_base_url: data.openai_base_url || 'https://api.openai.com/v1',
       allow_adult_content: Boolean(data.allow_adult_content),
       install_plan_mode: data.install_plan_mode || 'llm_first',
+      ui_locale: data.ui_locale || i18nState.locale || 'zh',
+    }
+    if (data.ui_locale && data.ui_locale !== i18nState.locale) {
+      setLocale(data.ui_locale)
     }
     configFile.value = data.config_file || ''
   } catch (e) {
     if (e?.name === 'AbortError') return
     loadFailed.value = true
-    message.value = { text: '加载配置失败: ' + e.message, type: 'err' }
+    message.value = { text: t('settings.loadFailed', { error: e.message }), type: 'err' }
   } finally {
     loading.value = false
   }
@@ -50,21 +58,18 @@ async function load() {
 
 async function save() {
   if (!form.value.data_dir.trim()) {
-    message.value = { text: '数据存放目录为必填项', type: 'err' }
+    message.value = { text: t('settings.dataDirRequired'), type: 'err' }
     return
   }
   saving.value = true
   message.value = { text: '', type: '' }
   try {
-    const data = await api.saveConfig({ ...form.value })
+    const data = await api.saveConfig({ ...form.value, ui_locale: i18nState.locale })
     configFile.value = data.config_file || ''
-    message.value = {
-      text: '配置已保存。若修改了数据目录，建议重启服务。',
-      type: 'ok',
-    }
+    message.value = { text: t('settings.saved'), type: 'ok' }
     emit('saved', data)
   } catch (e) {
-    message.value = { text: '保存失败: ' + e.message, type: 'err' }
+    message.value = { text: t('settings.saveFailed', { error: e.message }), type: 'err' }
   } finally {
     saving.value = false
   }
@@ -77,35 +82,33 @@ onMounted(load)
   <div class="settings-view">
     <header class="view-header">
       <div>
-        <h2>设置</h2>
-        <p>在此配置所有运行参数，保存后写入 config.yaml</p>
+        <h2>{{ t('settings.title') }}</h2>
+        <p>{{ t('settings.subtitle') }}</p>
       </div>
     </header>
 
-    <div v-if="loading" class="empty-state"><span class="spinner" /> 加载中...</div>
+    <div v-if="loading" class="empty-state"><span class="spinner" /> {{ t('settings.loading') }}</div>
 
     <div v-else-if="loadFailed" class="empty-state error-panel">
       <p>{{ message.text }}</p>
-      <button class="btn-primary" type="button" @click="load">重新加载</button>
+      <button class="btn-primary" type="button" @click="load">{{ t('settings.reload') }}</button>
     </div>
 
     <form v-else class="settings-form panel" @submit.prevent="save">
       <section class="form-section">
-        <h3>路径</h3>
+        <h3>{{ t('settings.paths') }}</h3>
         <div class="input-wrap required">
-          <label>数据存放目录 <span class="req">*</span></label>
+          <label>{{ t('settings.dataDir') }} <span class="req">*</span></label>
           <input
             v-model="form.data_dir"
             type="text"
             placeholder="D:\CyberpunkModManager\data"
             required
           />
-          <p class="hint">
-            存放数据库、下载缓存、备份（必填，无默认值）。修改后建议重启服务。
-          </p>
+          <p class="hint">{{ t('settings.dataDirHint') }}</p>
         </div>
         <div class="input-wrap">
-          <label>游戏安装目录</label>
+          <label>{{ t('settings.gamePath') }}</label>
           <input
             v-model="form.game_path"
             type="text"
@@ -113,58 +116,58 @@ onMounted(load)
           />
         </div>
         <div class="input-wrap">
-          <label>游戏档案 (game_domain)</label>
+          <label>{{ t('settings.gameDomain') }}</label>
           <input
             v-model="form.game_domain"
             type="text"
             placeholder="cyberpunk2077"
           />
-          <p class="hint">决定加载哪套路径参考规则（games/*.yaml 或 data_dir/game_profiles/）</p>
+          <p class="hint">{{ t('settings.gameDomainHint') }}</p>
         </div>
       </section>
 
       <section class="form-section">
-        <h3>Nexus Mods</h3>
+        <h3>{{ t('settings.nexus') }}</h3>
         <div class="input-wrap">
-          <label>API Key</label>
+          <label>{{ t('settings.apiKey') }}</label>
           <input v-model="form.nexus_api_key" type="password" placeholder="Nexus API Key" />
         </div>
         <label class="checkbox-row">
           <input v-model="form.allow_adult_content" type="checkbox" />
-          允许通过 API 自动下载成人内容模组（默认需手动下载后本地安装）
+          {{ t('settings.allowAdult') }}
         </label>
       </section>
 
       <section class="form-section">
-        <h3>LLM（Agent）</h3>
+        <h3>{{ t('settings.llm') }}</h3>
         <div class="input-wrap">
-          <label>API Key</label>
-          <input v-model="form.openai_api_key" type="password" placeholder="OpenAI 兼容 API Key" />
+          <label>{{ t('settings.apiKey') }}</label>
+          <input v-model="form.openai_api_key" type="password" placeholder="OpenAI compatible API Key" />
         </div>
         <div class="input-wrap">
-          <label>模型名称</label>
+          <label>{{ t('settings.modelName') }}</label>
           <input v-model="form.model_name" type="text" placeholder="gpt-4o-mini" />
         </div>
         <div class="input-wrap">
-          <label>API Base URL</label>
+          <label>{{ t('settings.apiBase') }}</label>
           <input v-model="form.openai_base_url" type="text" placeholder="https://api.openai.com/v1" />
         </div>
         <div class="input-wrap">
-          <label>安装计划模式</label>
+          <label>{{ t('settings.installPlanMode') }}</label>
           <select v-model="form.install_plan_mode">
-            <option value="llm_first">大模型主导（推荐，阅读结构与说明后规划）</option>
-            <option value="hybrid">混合（规则优先，LLM 补漏）</option>
-            <option value="rules_only">仅规则（不调用 LLM）</option>
+            <option value="llm_first">{{ t('settings.planLlmFirst') }}</option>
+            <option value="hybrid">{{ t('settings.planHybrid') }}</option>
+            <option value="rules_only">{{ t('settings.planRulesOnly') }}</option>
           </select>
-          <p class="hint">需配置 API Key；llm_first 会分析压缩包目录树、readme 与 Nexus 描述后生成完整安装映射</p>
+          <p class="hint">{{ t('settings.planHint') }}</p>
         </div>
       </section>
 
-      <p v-if="configFile" class="config-path mono">配置文件: {{ configFile }}</p>
+      <p v-if="configFile" class="config-path mono">{{ t('settings.configFile', { path: configFile }) }}</p>
 
       <div class="btn-row">
         <button class="btn-primary" type="submit" :disabled="saving">
-          {{ saving ? '保存中...' : '保存配置' }}
+          {{ saving ? t('settings.saving') : t('settings.save') }}
         </button>
       </div>
 

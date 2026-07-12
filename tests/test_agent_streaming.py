@@ -2,16 +2,17 @@
 """Agent 流式 API 测试。"""
 from __future__ import annotations
 
-from cyberpunk_mod_manager.agent.streaming import TOOL_LABELS, ToolCallRecord
+from cyberpunk_mod_manager.agent.prompts import TOOL_LABELS
+from cyberpunk_mod_manager.agent.streaming import ToolCallRecord
 
 
 def test_tool_labels_cover_known_tools() -> None:
-    assert "install_mod" in TOOL_LABELS
-    assert "search_mod" in TOOL_LABELS
-    assert "check_dependencies" in TOOL_LABELS
-    assert "install_mod_with_dependencies" in TOOL_LABELS
-    assert "list_pending_mods" in TOOL_LABELS
-    assert "audit_installation" in TOOL_LABELS
+    assert "install_mod" in TOOL_LABELS["zh"]
+    assert "search_mod" in TOOL_LABELS["en"]
+    assert "check_dependencies" in TOOL_LABELS["zh"]
+    assert "install_mod_with_dependencies" in TOOL_LABELS["zh"]
+    assert "list_pending_mods" in TOOL_LABELS["zh"]
+    assert "audit_installation" in TOOL_LABELS["zh"]
 
 
 def test_stream_yields_tool_deltas() -> None:

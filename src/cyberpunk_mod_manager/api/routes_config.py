@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..config import ConfigError, config, reload_config, save_config
+from ..config import ConfigError, config, reload_config, save_config, save_ui_locale
+from ..locale import normalize_locale
 from ..storage.db import init_db, reload_db_engine
 
 router = APIRouter()
@@ -21,6 +22,7 @@ class ConfigOut(BaseModel):
     openai_base_url: str = "https://api.openai.com/v1"
     allow_adult_content: bool = False
     install_plan_mode: str = "llm_first"
+    ui_locale: str = "zh"
     config_file: str = ""
     has_data_dir: bool = False
     downloads_dir: str = ""
@@ -37,6 +39,11 @@ class ConfigUpdate(BaseModel):
     openai_base_url: str = "https://api.openai.com/v1"
     allow_adult_content: bool = False
     install_plan_mode: str = "llm_first"
+    ui_locale: str = "zh"
+
+
+class LocaleUpdate(BaseModel):
+    ui_locale: str = Field(..., min_length=2, max_length=8)
 
 
 @router.get("", response_model=ConfigOut)
@@ -67,4 +74,17 @@ async def update_config(req: ConfigUpdate) -> ConfigOut:
 
     data = reload_config().to_public_dict()
     data["config_file"] = str(path)
+    return ConfigOut(**data)
+
+
+@router.put("/locale", response_model=ConfigOut)
+async def update_locale(req: LocaleUpdate) -> ConfigOut:
+    """仅更新 UI / LLM 回复语言。"""
+    try:
+        path = save_ui_locale(req.ui_locale)
+    except ConfigError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    data = reload_config().to_public_dict()
+    data["config_file"] = str(path)
+    data["ui_locale"] = normalize_locale(req.ui_locale)
     return ConfigOut(**data)

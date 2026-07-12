@@ -16,7 +16,7 @@ from cyberpunk_mod_manager.services import audit_ops
 async def test_audit_job_reports_progress_and_result(mock_audit) -> None:
     progress_events: list[dict] = []
 
-    async def fake_audit(*, auto_fix=False, on_progress=None):
+    async def fake_audit(*, auto_fix=False, on_progress=None, locale=None):
         if on_progress:
             on_progress({"phase": "scan", "phase_label": "扫描", "message": "扫描中", "percent": 10})
             on_progress({"phase": "done", "phase_label": "完成", "message": "完成", "percent": 100})

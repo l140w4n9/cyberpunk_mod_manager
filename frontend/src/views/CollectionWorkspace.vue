@@ -1,8 +1,11 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { api } from '../api/client'
+import { isRequestCancelled, useI18n } from '../i18n'
 
 const STORAGE_KEY = 'cpmm_collection_state'
+
+const { t } = useI18n()
 
 const props = defineProps({
   health: { type: Object, required: true },
@@ -51,14 +54,14 @@ const displayedQueue = computed(() => queue.value.slice(0, queueVisibleCount.val
 const hasMoreQueue = computed(() => queueVisibleCount.value < queue.value.length)
 
 function statusLabel(item) {
-  if (item.installed && item.status === 'pending') return '已安装·将跳过'
+  if (item.installed && item.status === 'pending') return t('collections.statusInstalledSkip')
   const map = {
-    pending: '待安装',
-    running: '安装中',
-    success: '完成',
-    skipped: '已跳过',
-    failed: '失败',
-    cancelled: '已取消',
+    pending: t('collections.statusPending'),
+    running: t('collections.statusRunning'),
+    success: t('collections.statusSuccess'),
+    skipped: t('collections.statusSkipped'),
+    failed: t('collections.statusFailed'),
+    cancelled: t('collections.statusCancelled'),
   }
   return map[item.status] || item.status
 }
@@ -86,7 +89,7 @@ async function parseCollection() {
   if (parseWatchdog) clearTimeout(parseWatchdog)
   parseAbort = new AbortController()
   parsing.value = true
-  parseStage.value = '正在请求 Nexus 收藏夹数据…'
+  parseStage.value = t('collections.parseStageRequest')
   parseError.value = ''
 
   parseWatchdog = setTimeout(() => {
@@ -94,8 +97,7 @@ async function parseCollection() {
     if (parseAbort) parseAbort.abort()
     parsing.value = false
     parseStage.value = ''
-    parseError.value =
-      '解析超时：未收到后端响应。请确认终端里 python -m cyberpunk_mod_manager 正在运行，并访问 /api/health 检查。'
+    parseError.value = t('collections.parseTimeout')
   }, 50000)
 
   try {
@@ -114,16 +116,16 @@ async function parseCollection() {
     revisionChanged.value = false
     applyRevisionFromParse()
     parsing.value = false
-    parseStage.value = '正在渲染安装队列…'
+    parseStage.value = t('collections.parseStageRender')
     await nextTick()
     await applyQueueInChunks(data.queue || [])
     schedulePersistState()
   } catch (e) {
     if (parseWatchdog) clearTimeout(parseWatchdog)
     parseWatchdog = null
-    if (e?.message === '请求已取消' && !parseError.value) {
-      parseError.value = '已取消解析'
-    } else if (e?.message && e.message !== '请求已取消') {
+    if (isRequestCancelled(e) && !parseError.value) {
+      parseError.value = t('collections.parseCancelled')
+    } else if (e?.message && !isRequestCancelled(e)) {
       parseError.value = e.message
     }
     collection.value = null
@@ -145,7 +147,7 @@ function cancelParse() {
   parseWatchdog = null
   parsing.value = false
   parseStage.value = ''
-  parseError.value = '已取消解析'
+  parseError.value = t('collections.parseCancelled')
 }
 
 function applyRevisionFromParse() {
@@ -218,7 +220,7 @@ async function restoreState() {
     if (data.stats) stats.value = data.stats
     if (Array.isArray(data.queue) && data.queue.length) {
       if (data.queue.length > 120) {
-        parseError.value = '队列过大未缓存，请重新点击「解析并生成队列」'
+        parseError.value = t('collections.queueTooLarge')
       } else {
         queue.value = data.queue
         queueVisibleCount.value = Math.min(queuePageSize, data.queue.length)
@@ -238,7 +240,7 @@ async function restoreState() {
           emit('install-finished')
         }
       } catch {
-        parseError.value = '安装任务已过期（服务可能已重启），可重新解析收藏夹'
+        parseError.value = t('collections.jobExpired')
         jobId.value = ''
         job.value = null
       }
@@ -279,7 +281,7 @@ function applyInstallStatusRows(rows) {
       installed: true,
       selected: false,
       status: item.status === 'pending' ? 'skipped' : item.status,
-      message: item.message || '已安装，将跳过',
+      message: item.message || t('maintenance.installedSkipMsg'),
     }
   })
   recomputeStats()
@@ -328,7 +330,7 @@ async function startInstall() {
   }
   const modIds = selectedModIds()
   if (!modIds.length) {
-    parseError.value = '没有待安装的模组（已安装的将自动跳过）'
+    parseError.value = t('collections.noPending')
     return
   }
   parseError.value = ''
@@ -440,14 +442,14 @@ onUnmounted(() => {
   <div class="collection-view">
     <header class="view-header">
       <div>
-        <h2>收藏夹安装</h2>
-        <p>粘贴 Nexus Collection 链接，生成安装队列并批量安装（使用各模组最新版本）</p>
+        <h2>{{ t('collections.title') }}</h2>
+        <p>{{ t('collections.subtitle') }}</p>
       </div>
     </header>
 
     <section class="panel url-section">
       <div class="input-wrap">
-        <label>收藏夹 URL</label>
+        <label>{{ t('collections.urlLabel') }}</label>
         <input
           v-model="collectionUrl"
           type="text"
@@ -461,22 +463,22 @@ onUnmounted(() => {
           :disabled="parsing || isRunning || !collectionUrl.trim() || !health.data_dir_configured"
           @click="parseCollection"
         >
-          {{ parsing ? '解析中...' : '解析并生成队列' }}
+          {{ parsing ? t('collections.parsing') : t('collections.parse') }}
         </button>
         <button
           v-if="parsing"
           class="btn-ghost"
           @click="cancelParse"
         >
-          取消
+          {{ t('collections.cancel') }}
         </button>
       </div>
-      <p v-if="!health.data_dir_configured" class="hint warn">请先在「设置」页配置数据目录</p>
-      <p v-if="!health.nexus_configured" class="hint warn">请先在「设置」页配置 Nexus API Key</p>
-      <p v-if="!health.nexus_valid && health.nexus_configured" class="hint warn">Nexus API Key 无效，无法解析收藏夹</p>
+      <p v-if="!health.data_dir_configured" class="hint warn">{{ t('collections.configureDataDir') }}</p>
+      <p v-if="!health.nexus_configured" class="hint warn">{{ t('collections.configureNexus') }}</p>
+      <p v-if="!health.nexus_valid && health.nexus_configured" class="hint warn">{{ t('collections.invalidNexus') }}</p>
       <p v-if="parseError" class="hint err">{{ parseError }}</p>
       <p v-else-if="parsing && parseStage" class="hint">{{ parseStage }}</p>
-      <p v-else-if="parsing" class="hint">解析中，最长等待约 45 秒…</p>
+      <p v-else-if="parsing" class="hint">{{ t('collections.parsingWait') }}</p>
     </section>
 
     <section v-if="collection" class="summary panel">
@@ -484,35 +486,35 @@ onUnmounted(() => {
         <div>
           <h3>{{ collection.title }}</h3>
           <p class="mono meta">
-            {{ collection.slug }} · 修订 #{{ collection.revision_number }} ·
-            {{ collection.unique_mod_count }} 个模组（去重后）
+            {{ collection.slug }} · #{{ collection.revision_number }} ·
+            {{ t('collections.modsDeduped', { count: collection.unique_mod_count }) }}
           </p>
           <p v-if="revisionChanged" class="hint warn">
-            收藏夹修订已更新，建议重新解析队列后再安装。
+            {{ t('collections.revisionUpdated') }}
           </p>
         </div>
-        <a class="link" :href="collection.url" target="_blank" rel="noopener">在 Nexus 打开</a>
+        <a class="link" :href="collection.url" target="_blank" rel="noopener">{{ t('collections.openNexus') }}</a>
       </div>
       <div v-if="stats" class="stats-row">
-        <span>共 {{ stats.total }}</span>
-        <span class="ok">已装 {{ stats.installed }}</span>
-        <span class="warn">待装 {{ stats.pending }}</span>
-        <span class="muted">可选 {{ stats.optional }}</span>
-        <span>已选 {{ selectedCount }}</span>
+        <span>{{ t('collections.total', { count: stats.total }) }}</span>
+        <span class="ok">{{ t('collections.installed', { count: stats.installed }) }}</span>
+        <span class="warn">{{ t('collections.pending', { count: stats.pending }) }}</span>
+        <span class="muted">{{ t('collections.optional', { count: stats.optional }) }}</span>
+        <span>{{ t('collections.selected', { count: selectedCount }) }}</span>
       </div>
       <div class="btn-row">
         <label class="select-all">
           <input v-model="allSelected" type="checkbox" :disabled="isRunning" />
-          全选未安装项
+          {{ t('collections.selectUninstalled') }}
         </label>
         <button
           class="btn-primary"
           :disabled="isRunning || installing || selectedCount === 0"
           @click="startInstall"
         >
-          {{ isRunning ? '安装进行中...' : `开始安装 (${selectedCount})` }}
+          {{ isRunning ? t('collections.installing') : t('collections.startInstall', { count: selectedCount }) }}
         </button>
-        <button v-if="isRunning" class="btn-ghost" @click="cancelInstall">停止后续安装</button>
+        <button v-if="isRunning" class="btn-ghost" @click="cancelInstall">{{ t('collections.stopInstall') }}</button>
       </div>
       <div v-if="progress" class="progress-bar-wrap">
         <div
@@ -520,10 +522,13 @@ onUnmounted(() => {
           :style="{ width: progress.total ? `${(progress.done / progress.total) * 100}%` : '0%' }"
         />
         <span class="progress-text">
-          {{ progress.done }}/{{ progress.total }}
-          · 成功 {{ progress.success }}
-          · 跳过 {{ progress.skipped }}
-          · 失败 {{ progress.failed }}
+          {{ t('collections.progress', {
+            done: progress.done,
+            total: progress.total,
+            success: progress.success,
+            skipped: progress.skipped,
+            failed: progress.failed,
+          }) }}
         </span>
       </div>
     </section>
@@ -549,7 +554,7 @@ onUnmounted(() => {
               <span class="order mono">#{{ item.order }}</span>
               <span class="mod-id mono">#{{ item.mod_id }}</span>
               <span class="name">{{ item.name || '—' }}</span>
-              <span v-if="item.optional" class="tag optional">可选</span>
+              <span v-if="item.optional" class="tag optional">{{ t('collections.optionalTag') }}</span>
             </div>
             <p v-if="item.message" class="queue-msg">{{ item.message }}</p>
           </div>
@@ -558,7 +563,7 @@ onUnmounted(() => {
       </div>
       <div v-if="hasMoreQueue" class="btn-row queue-more">
         <button class="btn-secondary" @click="showMoreQueue">
-          显示更多（{{ displayedQueue.length }}/{{ queue.length }}）
+          {{ t('collections.showMore', { shown: displayedQueue.length, total: queue.length }) }}
         </button>
       </div>
     </section>

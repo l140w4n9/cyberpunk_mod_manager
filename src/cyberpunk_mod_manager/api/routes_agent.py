@@ -8,13 +8,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-import re
-
 from agentscope.message import UserMsg
 
+from ..agent.prompts import build_user_message
 from ..agent.streaming import _format_sse, run_agent_collect, run_agent_stream
 from ..agent.tools import build_agent
 from ..config import config
+from ..locale import get_request_locale
 from ..services import chat_sessions
 
 router = APIRouter()
@@ -79,31 +79,8 @@ class AgentResponse(BaseModel):
     session_id: Optional[str] = None
 
 
-_FOLDER_HINT_RE = re.compile(
-    r"文件夹|本地文件夹|扫描.*安装|批量本地|install.*folder|local.*folder",
-    re.IGNORECASE,
-)
-_PATH_RE = re.compile(
-    r'(?:[A-Za-z]:[\\/][^\s"\']+|(?:downloads|\.cyberpunk_mod_manager)[^\s"\']*)',
-    re.IGNORECASE,
-)
-
-
 def _build_user_message(text: str, raw: str) -> UserMsg:
-    if text.isdigit():
-        content = (
-            f"请帮我安装模组 ID 为 {text} 的模组，"
-            "完成后告诉我安装结果和卸载方式。"
-        )
-    elif _FOLDER_HINT_RE.search(raw) or _PATH_RE.search(raw):
-        content = (
-            f"用户请求从本地文件夹安装模组：{raw}\n"
-            "请使用 scan_local_folder_tool 扫描文件夹并识别模组 ID，"
-            "再使用 install_local_folder 自动安装（含依赖）。"
-            "若用户指定了模组 ID，仅安装那些模组。"
-        )
-    else:
-        content = raw
+    content = build_user_message(text, raw, locale=get_request_locale())
     return UserMsg(content=content, name="user")
 
 
@@ -159,7 +136,8 @@ async def chat(req: AgentRequest) -> AgentResponse:
     text = req.message.strip()
     if not text:
         raise HTTPException(400, "消息不能为空")
-    agent = build_agent(_get_model())
+    locale = get_request_locale()
+    agent = build_agent(_get_model(), locale=locale)
     msg = _build_user_message(text, req.message)
     try:
         result = await run_agent_collect(agent, msg)
@@ -181,7 +159,8 @@ async def chat_stream(req: AgentRequest) -> StreamingResponse:
     if not text:
         raise HTTPException(400, "消息不能为空")
 
-    agent = build_agent(_get_model())
+    locale = get_request_locale()
+    agent = build_agent(_get_model(), locale=locale)
     msg = _build_user_message(text, req.message)
 
     async def event_generator():

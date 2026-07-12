@@ -1,4 +1,6 @@
 <script setup>
+import { useI18n } from '../i18n'
+
 defineProps({
   visible: { type: Boolean, default: false },
   report: { type: Object, default: null },
@@ -6,29 +8,31 @@ defineProps({
 })
 
 const emit = defineEmits(['confirm', 'cancel'])
+
+const { t } = useI18n()
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="visible" class="overlay" @click.self="emit('cancel')">
       <div class="dialog">
-        <h3 class="dialog-title">卸载确认</h3>
+        <h3 class="dialog-title">{{ t('uninstall.title') }}</h3>
         <p v-if="report" class="dialog-sub">
           {{ report.name }} <span class="mod-id">#{{ report.mod_id }}</span>
         </p>
 
         <div v-if="report?.safe" class="alert alert--ok">
-          可以安全卸载，不会影响其他已安装模组。
+          {{ t('uninstall.safe') }}
         </div>
         <div v-else class="alert alert--warn">
-          <strong>卸载可能不安全</strong>
+          <strong>{{ t('uninstall.unsafe') }}</strong>
           <ul>
             <li v-for="(w, i) in report?.warnings || []" :key="i">{{ w }}</li>
           </ul>
         </div>
 
         <div v-if="report?.blocking_dependents?.length" class="block-list">
-          <span class="label">受影响的模组</span>
+          <span class="label">{{ t('uninstall.affected') }}</span>
           <div class="chip-row">
             <span
               v-for="dep in report.blocking_dependents"
@@ -42,7 +46,7 @@ const emit = defineEmits(['confirm', 'cancel'])
 
         <div class="actions">
           <button class="btn-ghost" :disabled="loading" @click="emit('cancel')">
-            取消
+            {{ t('uninstall.cancel') }}
           </button>
           <button
             v-if="report?.safe"
@@ -50,7 +54,7 @@ const emit = defineEmits(['confirm', 'cancel'])
             :disabled="loading"
             @click="emit('confirm', false)"
           >
-            {{ loading ? '卸载中...' : '确认卸载' }}
+            {{ loading ? t('uninstall.unloading') : t('uninstall.confirm') }}
           </button>
           <button
             v-else-if="report?.can_uninstall"
@@ -58,7 +62,7 @@ const emit = defineEmits(['confirm', 'cancel'])
             :disabled="loading"
             @click="emit('confirm', true)"
           >
-            {{ loading ? '卸载中...' : '仍要卸载' }}
+            {{ loading ? t('uninstall.unloading') : t('uninstall.force') }}
           </button>
         </div>
       </div>

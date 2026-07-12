@@ -10,6 +10,7 @@ import httpx
 from sqlmodel import select
 
 from ..config import config
+from ..locale import effective_locale, normalize_locale
 from ..installer import get_uninstall_plan
 from ..models import Mod, ModStatus
 from ..nexus.client import NexusAPIError, NexusClient
@@ -243,7 +244,16 @@ def _collect_issues(mods: list[Mod]) -> dict[str, Any]:
     }
 
 
-def _rule_based_audit_summary(issues: dict[str, Any], updates: list[dict]) -> str:
+def _rule_based_audit_summary(
+    issues: dict[str, Any], updates: list[dict], *, locale: str = "zh"
+) -> str:
+    if normalize_locale(locale) == "en":
+        return (
+            f"Found {len(issues['incomplete'])} mod(s) with incomplete dependencies, "
+            f"{len(issues['pending'])} pending, "
+            f"{len(updates)} with updates available. "
+            "Repair dependencies first, then update or install pending mods as needed."
+        )
     return (
         f"检测到 {len(issues['incomplete'])} 个依赖不全、"
         f"{len(issues['pending'])} 个待安装、"
@@ -269,13 +279,24 @@ def _normalize_audit_report(parsed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _llm_audit_summary(issues: dict[str, Any], updates: list[dict]) -> dict[str, Any]:
-    rule_summary = _rule_based_audit_summary(issues, updates)
-    rule_recs = _rule_based_recommendations(issues, updates)
+async def _llm_audit_summary(
+    issues: dict[str, Any],
+    updates: list[dict],
+    *,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    loc = effective_locale(locale)
+    rule_summary = _rule_based_audit_summary(issues, updates, locale=loc)
+    rule_recs = _rule_based_recommendations(issues, updates, locale=loc)
 
     if not config.openai_api_key:
+        no_llm_msg = (
+            "LLM not configured; returning rule-based results only."
+            if loc == "en"
+            else "未配置 LLM，仅返回规则检测结果。"
+        )
         return {
-            "summary": "未配置 LLM，仅返回规则检测结果。",
+            "summary": no_llm_msg,
             "recommendations": rule_recs,
             "source": "rules",
         }
@@ -308,12 +329,22 @@ async def _llm_audit_summary(issues: dict[str, Any], updates: list[dict]) -> dic
             for item in updates[:12]
         ],
     }
-    system_prompt = (
-        "你是赛博朋克2077模组管理专家。"
-        "只输出一个 JSON 对象，不要 markdown，不要解释。"
-        '格式：{"summary":"中文一句话","risks":["风险"],"recommendations":[{"action":"install_deps|reinstall|install_pending|manual","mod_id":123,"reason":"原因"}]}'
-    )
-    user_prompt = f"审查数据：{json.dumps(payload, ensure_ascii=False)}"
+    if loc == "en":
+        system_prompt = (
+            "You are a Cyberpunk 2077 mod management expert. "
+            "Output a single JSON object only, no markdown, no extra text. "
+            'Format: {"summary":"one English sentence","risks":["risk"],'
+            '"recommendations":[{"action":"install_deps|reinstall|install_pending|manual",'
+            '"mod_id":123,"reason":"reason in English"}]}'
+        )
+        user_prompt = f"Audit data: {json.dumps(payload, ensure_ascii=False)}"
+    else:
+        system_prompt = (
+            "你是赛博朋克2077模组管理专家。"
+            "只输出一个 JSON 对象，不要 markdown，不要解释。"
+            '格式：{"summary":"中文一句话","risks":["风险"],"recommendations":[{"action":"install_deps|reinstall|install_pending|manual","mod_id":123,"reason":"原因"}]}'
+        )
+        user_prompt = f"审查数据：{json.dumps(payload, ensure_ascii=False)}"
     url = f"{config.openai_base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {config.openai_api_key}",
@@ -353,31 +384,38 @@ async def _llm_audit_summary(issues: dict[str, Any], updates: list[dict]) -> dic
 
 
 def _rule_based_recommendations(
-    issues: dict[str, Any], updates: list[dict]
+    issues: dict[str, Any], updates: list[dict], *, locale: str = "zh"
 ) -> list[dict[str, Any]]:
+    loc = normalize_locale(locale)
     recs: list[dict[str, Any]] = []
     for mod in issues["incomplete"]:
+        if loc == "en":
+            reason = f"Missing {mod['dependencies_missing_count']} required dependencies"
+        else:
+            reason = f"缺少 {mod['dependencies_missing_count']} 个必需依赖"
         recs.append(
             {
                 "action": "install_deps",
                 "mod_id": mod["nexus_mod_id"],
-                "reason": f"缺少 {mod['dependencies_missing_count']} 个必需依赖",
+                "reason": reason,
             }
         )
     for item in updates:
+        default_reason = "Update available" if loc == "en" else "有可用更新"
         recs.append(
             {
                 "action": "reinstall",
                 "mod_id": item["mod_id"],
-                "reason": "; ".join(item.get("reasons") or ["有可用更新"]),
+                "reason": "; ".join(item.get("reasons") or [default_reason]),
             }
         )
+    pending_reason = "Downloaded but not installed" if loc == "en" else "已下载但未安装"
     for mod in issues["downloaded_not_installed"][:10]:
         recs.append(
             {
                 "action": "install_pending",
                 "mod_id": mod["nexus_mod_id"],
-                "reason": "已下载但未安装",
+                "reason": pending_reason,
             }
         )
     return recs
@@ -448,9 +486,13 @@ async def _auto_fix_issues(
 
 
 async def audit_installation(
-    *, auto_fix: bool = False, on_progress: ProgressFn = None
+    *,
+    auto_fix: bool = False,
+    on_progress: ProgressFn = None,
+    locale: str | None = None,
 ) -> str:
     """审查当前模组安装健康状态，可选自动修复依赖与更新。"""
+    loc = effective_locale(locale)
     _emit(
         on_progress,
         phase="scan",
@@ -482,7 +524,7 @@ async def audit_installation(
         message="正在生成审查建议…",
         percent=78,
     )
-    llm_report = await _llm_audit_summary(issues, updates)
+    llm_report = await _llm_audit_summary(issues, updates, locale=loc)
     auto_fix_result: dict[str, Any] | None = None
     if auto_fix:
         auto_fix_result = await _auto_fix_issues(issues, updates, on_progress=on_progress)

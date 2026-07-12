@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { filterMods } from '../../utils/mods'
+import { useI18n } from '../../i18n'
 
 const props = defineProps({
   active: { type: String, default: 'agent' },
@@ -9,6 +10,8 @@ const props = defineProps({
 })
 
 defineEmits(['navigate', 'refresh'])
+
+const { t, locale, setLocale } = useI18n()
 
 const pendingCount = computed(() => filterMods(props.mods, 'pending').length)
 const installedCount = computed(() => filterMods(props.mods, 'installed').length)
@@ -32,17 +35,17 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         @click="$emit('navigate', 'agent')"
       >
         <span class="nav-icon">◈</span>
-        Agent 运行
+        {{ t('nav.agent') }}
       </button>
 
-      <div class="nav-group-label">模组管理</div>
+      <div class="nav-group-label">{{ t('nav.mods') }}</div>
       <button
         class="nav-item"
         :class="{ active: active === 'mods' }"
         @click="$emit('navigate', 'mods')"
       >
         <span class="nav-icon">▣</span>
-        已安装
+        {{ t('nav.installed') }}
         <span v-if="installedCount" class="nav-badge ok">{{ installedCount }}</span>
       </button>
       <button
@@ -51,7 +54,7 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         @click="$emit('navigate', 'mods-pending')"
       >
         <span class="nav-icon">○</span>
-        待安装
+        {{ t('nav.pending') }}
         <span v-if="pendingCount" class="nav-badge warn">{{ pendingCount }}</span>
       </button>
       <button
@@ -60,7 +63,7 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         @click="$emit('navigate', 'mods-incomplete')"
       >
         <span class="nav-icon">⚠</span>
-        依赖不全
+        {{ t('nav.incomplete') }}
         <span v-if="incompleteCount" class="nav-badge danger">{{ incompleteCount }}</span>
       </button>
       <button
@@ -69,7 +72,7 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         @click="$emit('navigate', 'collections')"
       >
         <span class="nav-icon">♥</span>
-        收藏安装
+        {{ t('nav.collections') }}
       </button>
       <button
         class="nav-item"
@@ -77,25 +80,43 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
         @click="$emit('navigate', 'maintenance')"
       >
         <span class="nav-icon">✦</span>
-        健康审查
+        {{ t('nav.maintenance') }}
       </button>
 
-      <div class="nav-group-label">系统</div>
+      <div class="nav-group-label">{{ t('nav.system') }}</div>
       <button
         class="nav-item"
         :class="{ active: active === 'settings' }"
         @click="$emit('navigate', 'settings')"
       >
         <span class="nav-icon">⚙</span>
-        设置
+        {{ t('nav.settings') }}
       </button>
       <button class="nav-item nav-item-muted" @click="$emit('refresh')">
         <span class="nav-icon">↻</span>
-        刷新数据
+        {{ t('nav.refresh') }}
       </button>
     </nav>
 
     <div class="sidebar-footer">
+      <div class="lang-switch" role="group" :aria-label="t('lang.label')">
+        <button
+          type="button"
+          class="lang-btn"
+          :class="{ active: locale === 'zh' }"
+          @click="setLocale('zh')"
+        >
+          {{ t('lang.zh') }}
+        </button>
+        <button
+          type="button"
+          class="lang-btn"
+          :class="{ active: locale === 'en' }"
+          @click="setLocale('en')"
+        >
+          {{ t('lang.en') }}
+        </button>
+      </div>
       <div class="health" :class="{ ok: health.ready }">
         <span class="health-dot" />
         <div class="health-meta">
@@ -220,6 +241,34 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
 .sidebar-footer {
   padding: 14px 12px;
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.lang-switch {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+}
+.lang-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.lang-btn:hover {
+  color: var(--text);
+}
+.lang-btn.active {
+  background: rgba(0, 212, 255, 0.12);
+  color: var(--accent2);
 }
 .health {
   display: flex;
@@ -275,7 +324,9 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
     gap: 10px;
     border-top: none;
     padding: 8px 12px;
+    flex-direction: row;
   }
+  .lang-switch { flex: none; }
   .health { margin-bottom: 0; }
 }
 </style>

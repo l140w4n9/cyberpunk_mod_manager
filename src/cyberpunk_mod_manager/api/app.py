@@ -12,11 +12,13 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..config import ConfigError, config
+from ..locale import reset_request_locale, resolve_locale, set_request_locale
 from ..storage.db import init_db
 from .routes_mods import router as mods_router
 from .routes_agent import router as agent_router
@@ -39,6 +41,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Cyberpunk 2077 Mod Manager", lifespan=lifespan)
+
+
+class LocaleMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        locale = resolve_locale(
+            header_locale=request.headers.get("X-Locale"),
+            accept_language=request.headers.get("Accept-Language"),
+            config_locale=config.ui_locale,
+        )
+        token = set_request_locale(locale)
+        try:
+            return await call_next(request)
+        finally:
+            reset_request_locale(token)
+
+
+app.add_middleware(LocaleMiddleware)
 
 app.include_router(config_router, prefix="/api/config", tags=["config"])
 app.include_router(collections_router, prefix="/api/collections", tags=["collections"])
@@ -79,6 +98,7 @@ async def health(quick: bool = False) -> dict:
         "nexus_user": nexus_user,
         "nexus_premium": bool(nexus_user.get("is_premium")),
         "llm_configured": bool(config.openai_api_key),
+        "ui_locale": config.ui_locale,
     }
 
 

@@ -1,7 +1,7 @@
-import { TOOL_STATE_LABELS } from '../api/client'
+import { toolStateLabel } from '../i18n'
 
 export function stateLabel(state) {
-  return TOOL_STATE_LABELS[state] || state || '执行中'
+  return toolStateLabel(state) || state || toolStateLabel('running')
 }
 
 export function formatJson(text) {
@@ -22,7 +22,7 @@ export function createTool(id, name, label) {
     arguments: '',
     result: '',
     state: 'running',
-    stateLabel: '执行中',
+    stateLabel: toolStateLabel('running'),
     startedAt: Date.now(),
     endedAt: null,
   }

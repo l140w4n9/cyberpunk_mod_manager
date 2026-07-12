@@ -17,25 +17,7 @@ from agentscope.event import (
 )
 from agentscope.message import Msg, UserMsg
 
-TOOL_LABELS = {
-    "search_mod": "查询模组信息",
-    "check_dependencies": "检查前置依赖",
-    "install_mod_with_dependencies": "安装模组及依赖",
-    "install_mods_batch": "批量安装模组",
-    "install_mod": "下载并安装模组",
-    "install_local_mod": "本地压缩包安装",
-    "preview_install_plan": "预览安装计划",
-    "scan_local_folder_tool": "扫描本地文件夹",
-    "install_local_folder": "文件夹批量本地安装",
-    "uninstall_mod": "卸载模组",
-    "uninstall_mod_with_plan_review": "解读计划并卸载",
-    "list_mods": "列出库存模组",
-    "list_pending_mods": "列出待安装模组",
-    "list_incomplete_mods": "列出依赖不全模组",
-    "check_mod_updates": "检查模组更新",
-    "audit_installation": "审查安装健康状态",
-    "get_uninstall_plan_tool": "查看卸载计划",
-}
+from .prompts import get_tool_label
 
 
 @dataclass
@@ -96,7 +78,7 @@ async def run_agent_stream(
             record = ToolCallRecord(
                 id=evt.tool_call_id,
                 name=evt.tool_call_name,
-                label=TOOL_LABELS.get(evt.tool_call_name, evt.tool_call_name),
+                label=get_tool_label(evt.tool_call_name),
             )
             tools[evt.tool_call_id] = record
             yield "tool_start", record.to_dict()

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ..locale import get_request_locale, reset_request_locale, set_request_locale
 from . import health_audit
 
 
@@ -22,6 +23,7 @@ class AuditJob:
     kind: str
     state: str = "pending"
     auto_fix: bool = False
+    locale: str = "zh"
     progress: dict[str, Any] = field(
         default_factory=lambda: {
             "phase": "pending",
@@ -68,6 +70,7 @@ async def start_audit_job(*, auto_fix: bool = False) -> str:
         job_id=job_id,
         kind="audit",
         auto_fix=auto_fix,
+        locale=get_request_locale(),
         created_at=now,
         updated_at=now,
     )
@@ -79,7 +82,13 @@ async def start_audit_job(*, auto_fix: bool = False) -> str:
 async def start_updates_job() -> str:
     job_id = str(uuid.uuid4())
     now = _utc_now()
-    job = AuditJob(job_id=job_id, kind="updates", created_at=now, updated_at=now)
+    job = AuditJob(
+        job_id=job_id,
+        kind="updates",
+        locale=get_request_locale(),
+        created_at=now,
+        updated_at=now,
+    )
     _jobs[job_id] = job
     asyncio.create_task(_run_updates_job(job_id))
     return job_id
@@ -91,10 +100,12 @@ async def _run_audit_job(job_id: str) -> None:
         return
     job.state = "running"
     job.updated_at = _utc_now()
+    token = set_request_locale(job.locale)
     try:
         raw = await health_audit.audit_installation(
             auto_fix=job.auto_fix,
             on_progress=lambda payload: _set_progress(job, payload),
+            locale=job.locale,
         )
         job.result = json.loads(raw)
         job.state = "done"
@@ -119,6 +130,8 @@ async def _run_audit_job(job_id: str) -> None:
                 "percent": 0,
             },
         )
+    finally:
+        reset_request_locale(token)
     job.updated_at = _utc_now()
 
 

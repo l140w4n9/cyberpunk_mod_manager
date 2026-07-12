@@ -1,5 +1,5 @@
 <script setup>
-import { STATUS_LABELS } from '../../api/client'
+import { useI18n, statusLabel } from '../../i18n'
 import DepChipList from './DepChipList.vue'
 
 defineProps({
@@ -12,13 +12,17 @@ defineProps({
 
 defineEmits(['uninstall', 'install', 'install-with-deps', 'cleanup'])
 
+const { t, locale } = useI18n()
+
 function formatDate(value) {
-  return value ? new Date(value).toLocaleString('zh-CN') : '—'
+  if (!value) return '—'
+  const loc = locale.value === 'zh' ? 'zh-CN' : 'en-US'
+  return new Date(value).toLocaleString(loc)
 }
 
 function summaryLabel(source) {
-  if (source === 'ai') return 'AI'
-  if (source === 'fallback') return '简介'
+  if (source === 'ai') return t('modCard.summaryAi')
+  if (source === 'fallback') return t('modCard.summaryFallback')
   return ''
 }
 </script>
@@ -30,8 +34,8 @@ function summaryLabel(source) {
         <div class="mod-title-row">
           <span class="mod-id mono">#{{ mod.nexus_mod_id }}</span>
           <h3>{{ mod.name || '—' }}</h3>
-          <span class="badge" :class="mod.status">{{ STATUS_LABELS[mod.status] || mod.status }}</span>
-          <span v-if="showWarning" class="badge warn">依赖不全</span>
+          <span class="badge" :class="mod.status">{{ statusLabel(mod.status) }}</span>
+          <span v-if="showWarning" class="badge warn">{{ t('modCard.depsIncomplete') }}</span>
         </div>
         <p v-if="mod.summary_line" class="summary">
           <span v-if="summaryLabel(mod.summary_source)" class="tag">{{ summaryLabel(mod.summary_source) }}</span>
@@ -45,21 +49,21 @@ function summaryLabel(source) {
             :disabled="installing"
             @click="$emit('install', mod.nexus_mod_id)"
           >
-            {{ installing ? '安装中...' : '安装' }}
+            {{ installing ? t('modCard.install') + '...' : t('modCard.install') }}
           </button>
           <button
             class="btn-ghost btn-sm"
             :disabled="installing"
             @click="$emit('install-with-deps', mod.nexus_mod_id)"
           >
-            含依赖安装
+            {{ t('modCard.withDeps') }}
           </button>
           <button
             class="btn-danger btn-sm"
             :disabled="installing || cleaning"
             @click="$emit('cleanup', mod.nexus_mod_id)"
           >
-            {{ cleaning ? '清理中...' : '清理' }}
+            {{ cleaning ? t('modCard.cleaning') : t('modCard.cleanup') }}
           </button>
         </template>
         <button
@@ -68,7 +72,7 @@ function summaryLabel(source) {
           :disabled="installing"
           @click="$emit('install-with-deps', mod.nexus_mod_id)"
         >
-          {{ installing ? '安装中...' : '补装依赖' }}
+          {{ installing ? t('mods.installing') : t('modCard.repairDeps') }}
         </button>
         <button
           v-if="filterMode === 'installed'"
@@ -76,7 +80,7 @@ function summaryLabel(source) {
           :disabled="mod.status !== 'installed' || installing"
           @click="$emit('uninstall', mod.nexus_mod_id)"
         >
-          卸载
+          {{ t('modCard.uninstall') }}
         </button>
       </div>
     </div>
@@ -85,12 +89,12 @@ function summaryLabel(source) {
       <span>v{{ mod.version || '—' }}</span>
       <span>{{ formatDate(mod.installed_at) }}</span>
       <span v-if="mod.dependencies_missing_count" class="miss-count">
-        缺失 {{ mod.dependencies_missing_count }} 项必需依赖
+        {{ t('modCard.missingDeps', { count: mod.dependencies_missing_count }) }}
       </span>
     </div>
 
     <div v-if="mod.dependencies?.length" class="deps-section">
-      <span class="section-label">前置依赖</span>
+      <span class="section-label">{{ t('modCard.prerequisites') }}</span>
       <DepChipList :dependencies="mod.dependencies" />
     </div>
   </article>
@@ -118,40 +122,41 @@ function summaryLabel(source) {
   margin-bottom: 6px;
 }
 .mod-id { color: var(--accent2); font-size: 12px; }
-.mod-title-row h3 { font-size: 15px; }
-.badge.warn {
-  background: rgba(255, 176, 32, 0.12);
-  color: var(--warn);
-  border: 1px solid rgba(255, 176, 32, 0.3);
-}
-.summary {
-  font-size: 13px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-.tag {
-  display: inline-block;
-  margin-right: 6px;
-  padding: 1px 5px;
-  border-radius: 3px;
+.mod-title-row h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.badge {
   font-size: 10px;
-  background: rgba(252, 238, 10, 0.1);
-  color: var(--accent);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+.badge.installed { color: var(--ok); border: 1px solid rgba(46, 230, 166, 0.25); }
+.badge.warn { color: var(--warn); border: 1px solid rgba(255, 176, 32, 0.3); }
+.summary { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+.tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 212, 255, 0.1);
+  color: var(--accent2);
+  margin-right: 6px;
 }
 .mod-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-top: 10px;
+  gap: 12px;
   font-size: 11px;
   color: var(--muted);
+  margin-top: 10px;
 }
-.miss-count { color: var(--danger); }
+.miss-count { color: var(--warn); }
 .deps-section { margin-top: 12px; }
 .section-label {
+  display: block;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
+  margin-bottom: 6px;
 }
 </style>

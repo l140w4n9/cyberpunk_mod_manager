@@ -179,6 +179,8 @@ class AppConfig(BaseModel):
     allow_adult_content: bool = False
     # 安装计划：llm_first=大模型主导 | hybrid=规则+LLM补漏 | rules_only=仅规则
     install_plan_mode: str = "llm_first"
+    # UI / LLM 回复语言：zh | en
+    ui_locale: str = "zh"
     # 已加载的配置文件路径（便于调试）
     config_file: str = ""
 
@@ -232,6 +234,7 @@ class AppConfig(BaseModel):
             "openai_base_url": self.openai_base_url,
             "allow_adult_content": self.allow_adult_content,
             "install_plan_mode": self.install_plan_mode,
+            "ui_locale": self.ui_locale,
             "config_file": self.config_file,
             "has_data_dir": self.has_data_dir,
             "downloads_dir": str(self.downloads_dir) if self.has_data_dir else "",
@@ -268,6 +271,37 @@ def _build_config() -> AppConfig:
     return AppConfig(**merged)
 
 
+def save_ui_locale(locale: str) -> Path:
+    """仅更新 config.yaml 中的 ui_locale。"""
+    from .locale import normalize_locale
+
+    loc = normalize_locale(locale)
+    path = resolve_config_write_path(config.config_file)
+    file_cfg: dict[str, Any] = {}
+    if path.exists():
+        file_cfg = _load_config_file(path)
+    file_cfg["ui_locale"] = loc
+    if not str(file_cfg.get("data_dir", "")).strip() and config.has_data_dir:
+        file_cfg["data_dir"] = _yaml_safe_path(str(config.data_dir))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = (
+        "# Cyberpunk 2077 模组管理器配置\n"
+        "# 也可在前端「设置」页修改\n\n"
+    )
+    content = header + yaml.safe_dump(file_cfg, allow_unicode=True, default_style="")
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+    reload_config()
+    if config.config_file == "":
+        config.config_file = str(path)
+    return path
+
+
 def save_config(values: dict[str, Any]) -> Path:
     """将配置写入 YAML 文件并热重载。"""
     data_dir = str(values.get("data_dir", "")).strip()
@@ -291,6 +325,7 @@ def save_config(values: dict[str, Any]) -> Path:
         or "cyberpunk2077",
         "install_plan_mode": str(values.get("install_plan_mode", "llm_first")).strip()
         or "llm_first",
+        "ui_locale": str(values.get("ui_locale", "zh")).strip() or "zh",
     }
 
     path = resolve_config_write_path(config.config_file)

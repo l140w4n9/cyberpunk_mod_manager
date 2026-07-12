@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import ModCard from '../components/mods/ModCard.vue'
 import DepChipList from '../components/mods/DepChipList.vue'
 import { filterMods } from '../utils/mods'
+import { useI18n } from '../i18n'
 
 const props = defineProps({
   mods: { type: Array, default: () => [] },
@@ -26,6 +27,8 @@ const emit = defineEmits([
   'cleanup-all-pending',
 ])
 
+const { t } = useI18n()
+
 const modIdInput = ref('')
 const archiveNameInput = ref('')
 const folderPathInput = ref('')
@@ -34,25 +37,11 @@ const scanningFolder = ref(false)
 const depsReport = ref(null)
 const checkingDeps = ref(false)
 
-const PAGE_META = {
-  installed: {
-    title: '已安装模组',
-    desc: '依赖已满足、可正常使用的模组',
-    empty: '暂无已安装且依赖完整的模组',
-  },
-  pending: {
-    title: '待安装模组',
-    desc: '已入库但尚未安装到游戏的模组',
-    empty: '暂无待安装模组',
-  },
-  incomplete: {
-    title: '依赖不全',
-    desc: '已安装但缺少必需依赖，可能无法正常使用',
-    empty: '暂无依赖不全的模组',
-  },
-}
-
-const pageMeta = computed(() => PAGE_META[props.filterMode] || PAGE_META.installed)
+const pageMeta = computed(() => ({
+  title: t(`mods.${props.filterMode}.title`),
+  desc: t(`mods.${props.filterMode}.desc`),
+  empty: t(`mods.${props.filterMode}.empty`),
+}))
 const filteredMods = computed(() => filterMods(props.mods, props.filterMode))
 
 function submitInstall(withDeps = false) {
@@ -97,19 +86,17 @@ function installFromFolder() {
   const modIds = id ? [parseInt(id, 10)] : null
 
   if (folderScan.value?.is_downloads_dir && !modIds) {
-    window.alert(
-      '不能对 downloads 缓存目录执行「安装全部」。\n请填写要安装的模组 ID，或使用独立子文件夹。',
-    )
+    window.alert(t('mods.noDownloadsBatch'))
     return
   }
 
   const pending = folderScan.value?.pending_count
   if (!modIds && pending != null && pending > 0) {
     const skip = folderScan.value?.installed_count || 0
-    const msg =
-      `将安装 ${pending} 个未安装模组` +
-      (skip ? `，${skip} 个已安装将自动跳过` : '') +
-      '。继续？'
+    const msg = t('mods.confirmFolderInstall', {
+      pending,
+      skip: skip ? t('mods.confirmFolderSkip', { skip }) : '',
+    })
     if (!window.confirm(msg)) return
   }
 
@@ -119,20 +106,14 @@ function installFromFolder() {
 function cleanupMod(modId) {
   const mod = filteredMods.value.find((m) => m.nexus_mod_id === modId)
   const label = mod?.name ? `${mod.name} (#${modId})` : `#${modId}`
-  if (!window.confirm(`从库存清理 ${label}？\n仅删除记录，不影响游戏目录（未安装模组）。`)) return
+  if (!window.confirm(t('mods.confirmCleanup', { label }))) return
   emit('cleanup-mod', modId)
 }
 
 function cleanupAllPending() {
   const count = filteredMods.value.length
   if (!count) return
-  if (
-    !window.confirm(
-      `一键清理全部 ${count} 个待安装模组？\n将从库存删除记录，不会删除游戏内文件。`,
-    )
-  ) {
-    return
-  }
+  if (!window.confirm(t('mods.confirmCleanupAll', { count }))) return
   emit('cleanup-all-pending', filteredMods.value.map((m) => m.nexus_mod_id))
 }
 </script>
@@ -144,77 +125,85 @@ function cleanupAllPending() {
         <h2>{{ pageMeta.title }}</h2>
         <p>{{ pageMeta.desc }}</p>
       </div>
-      <span class="count-badge">{{ filteredMods.length }} 项</span>
+      <span class="count-badge">{{ t('mods.items', { count: filteredMods.length }) }}</span>
     </header>
 
     <section v-if="filterMode === 'installed'" class="install-section panel">
       <div class="install-grid">
         <div class="input-wrap">
-          <label>Nexus Mod ID</label>
+          <label>{{ t('mods.modId') }}</label>
           <input v-model="modIdInput" type="number" placeholder="27967" />
         </div>
         <div class="input-wrap">
-          <label>本地压缩包</label>
+          <label>{{ t('mods.localArchive') }}</label>
           <input v-model="archiveNameInput" type="text" placeholder="27967_xxx.zip" />
         </div>
       </div>
       <div class="btn-row">
         <button class="btn-primary" :disabled="installing || !modIdInput.trim()" @click="submitInstall(false)">
-          {{ installing ? '安装中...' : '安装' }}
+          {{ installing ? t('mods.installing') : t('mods.install') }}
         </button>
         <button class="btn-ghost" :disabled="installing || !modIdInput.trim()" @click="submitInstall(true)">
-          含依赖安装
+          {{ t('mods.withDeps') }}
         </button>
         <button
           class="btn-ghost"
           :disabled="installing || !modIdInput.trim() || !archiveNameInput.trim()"
           @click="submitLocalInstall"
         >
-          本地安装
+          {{ t('mods.localInstall') }}
         </button>
         <button class="btn-ghost" :disabled="checkingDeps || !modIdInput.trim()" @click="checkDeps">
-          {{ checkingDeps ? '检查中...' : '检查依赖' }}
+          {{ checkingDeps ? t('mods.checking') : t('mods.checkDeps') }}
         </button>
       </div>
 
       <div v-if="depsReport" class="deps-report">
         <span :class="depsReport.all_satisfied ? 'ok' : 'warn'">
-          {{ depsReport.all_satisfied ? '依赖已满足' : `缺失 ${depsReport.missing_count} 项必需依赖` }}
+          {{
+            depsReport.all_satisfied
+              ? t('mods.depsOk')
+              : t('mods.depsMissing', { count: depsReport.missing_count })
+          }}
         </span>
         <DepChipList :dependencies="depsReport.dependencies" />
       </div>
 
       <div class="folder-section">
-        <div class="section-divider">文件夹批量安装</div>
+        <div class="section-divider">{{ t('mods.folderBatch') }}</div>
         <div class="input-wrap">
-          <label>本地文件夹</label>
+          <label>{{ t('mods.localFolder') }}</label>
           <input
             v-model="folderPathInput"
             type="text"
-            placeholder="例如 D:\Mods\batch1（勿填 downloads 做批量安装）"
+            :placeholder="t('mods.folderPlaceholder')"
           />
-          <p class="input-hint">
-            请使用独立子文件夹；已安装模组会自动跳过。查看状态请点「扫描文件夹」。
-          </p>
+          <p class="input-hint">{{ t('mods.folderHint') }}</p>
         </div>
         <div class="btn-row">
           <button class="btn-ghost" :disabled="scanningFolder || !folderPathInput.trim()" @click="scanFolder">
-            {{ scanningFolder ? '扫描中...' : '扫描文件夹' }}
+            {{ scanningFolder ? t('mods.scanning') : t('mods.scanFolder') }}
           </button>
           <button
             class="btn-primary"
             :disabled="installing || !folderPathInput.trim()"
             @click="installFromFolder"
           >
-            {{ installing ? '安装中...' : modIdInput.trim() ? '文件夹安装指定模组' : '文件夹安装全部' }}
+            {{
+              installing
+                ? t('mods.installing')
+                : modIdInput.trim()
+                  ? t('mods.folderInstallOne')
+                  : t('mods.folderInstallAll')
+            }}
           </button>
         </div>
         <div v-if="folderScan" class="scan-result">
           <span class="scan-summary">
-            识别 {{ folderScan.detected_count }} 个 ·
-            <span class="ok-text">已安装 {{ folderScan.installed_count || 0 }}</span> ·
-            <span class="pending-text">待安装 {{ folderScan.pending_count || 0 }}</span>
-            <template v-if="folderScan.is_downloads_dir"> · downloads 目录</template>
+            {{ t('mods.detected', { count: folderScan.detected_count }) }} ·
+            <span class="ok-text">{{ t('mods.installedCount', { count: folderScan.installed_count || 0 }) }}</span> ·
+            <span class="pending-text">{{ t('mods.pendingCount', { count: folderScan.pending_count || 0 }) }}</span>
+            <template v-if="folderScan.is_downloads_dir"> · {{ t('mods.downloadsDir') }}</template>
           </span>
           <div v-if="folderScan.detected?.length" class="chip-row mono">
             <span
@@ -230,17 +219,21 @@ function cleanupAllPending() {
       </div>
     </section>
 
-    <div v-if="loading" class="empty-state"><span class="spinner" /> 加载中...</div>
+    <div v-if="loading" class="empty-state"><span class="spinner" /> {{ t('mods.loading') }}</div>
     <div v-else-if="!filteredMods.length" class="empty-state">{{ pageMeta.empty }}</div>
 
     <section v-else-if="filterMode === 'pending'" class="pending-toolbar panel">
-      <p class="toolbar-hint">清理会从库存移除记录，适用于误添加或不再需要的待安装项。</p>
+      <p class="toolbar-hint">{{ t('mods.pendingToolbar') }}</p>
       <button
         class="btn-danger"
         :disabled="installing || cleaning"
         @click="cleanupAllPending"
       >
-        {{ cleaning ? '清理中...' : `一键清理全部 (${filteredMods.length})` }}
+        {{
+          cleaning
+            ? t('mods.cleaning')
+            : t('mods.cleanupAll', { count: filteredMods.length })
+        }}
       </button>
     </section>
 

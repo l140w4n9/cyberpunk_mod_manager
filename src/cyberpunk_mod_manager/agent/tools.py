@@ -16,9 +16,14 @@ from ..config import config
 from ..installer import Installer, get_uninstall_plan
 from ..models import Mod, ModStatus
 from ..nexus.client import NexusClient
-from ..services import discovery, health_audit, mod_ops
+from ..locale import effective_locale, get_request_locale
+from .prompts import (
+    get_permission_message,
+    get_system_prompt,
+)
 from ..services.install_plan import build_install_plan, explain_uninstall_plan
 from ..services.concurrency import DEFAULT_CONCURRENCY, gather_bounded
+from ..services import discovery, health_audit, mod_ops
 from ..storage.db import get_session, init_db
 
 # 统一说明：凡出现 mod_id / mod_ids 均指 Nexus 网站模组数字 ID（如 27967），
@@ -219,6 +224,7 @@ async def uninstall_mod_with_plan_review(mod_id: int, force: bool = False) -> st
         mod_id,
         plan.to_dict(),
         mod_name=mod_name,
+        locale=get_request_locale(),
     )
     installer = Installer()
     result = installer.uninstall(internal_id)
@@ -440,53 +446,8 @@ class ModFunctionTool(FunctionTool):
     async def check_permissions(self, *_args, **_kwargs) -> PermissionDecision:
         return PermissionDecision(
             behavior=PermissionBehavior.ALLOW,
-            message="模组管理工具已授权",
+            message=get_permission_message(),
         )
-
-
-SYSTEM_PROMPT = """你是赛博朋克 2077 模组管理助手。你可以帮助用户下载、安装、卸载和管理游戏模组。
-
-【参数通则】
-- mod_id / mod_ids：一律指 Nexus 网站模组数字 ID（如 27967），不是数据库 id、不是文件名。
-- folder_path：本地文件夹绝对路径，或相对 downloads 的子路径；禁止对 downloads 缓存根目录批量「安装全部」。
-- archive_name：本地 zip/7z 路径或 downloads 下的文件名。
-- force：仅 uninstall_mod 使用，true 表示无视反向依赖警告强制卸载。
-- auto_fix：仅 audit_installation 使用，true 才会自动补依赖与重装更新。
-
-【工具与参数】
-- search_mod(mod_id)
-- check_dependencies(mod_id)
-- install_mod_with_dependencies(mod_id) — 首选安装
-- install_mods_batch(mod_ids) — 批量，mod_ids 为整数数组
-- install_mod(mod_id) — 不自动装依赖
-- install_local_mod(mod_id, archive_name)
-- preview_install_plan(mod_id, archive_name="") — 仅预览安装计划，不执行
-- scan_local_folder_tool(folder_path)
-- install_local_folder(folder_path, mod_ids=null)
-- uninstall_mod(mod_id, force=false)
-- uninstall_mod_with_plan_review(mod_id, force=false) — 解读卸载计划后执行
-- list_mods() / list_pending_mods() / list_incomplete_mods() / check_mod_updates() — 无参
-- fetch_trending_mods() / sync_tracked_mods() / fetch_updated_mod_feed(period="1w") / batch_mod_status(mod_ids) — Nexus 发现
-- audit_installation(auto_fix=false)
-- get_uninstall_plan_tool(mod_id)
-
-工作流程：
-1. 用户提供模组 ID → search_mod → check_dependencies → preview_install_plan（可选）→ install_mod_with_dependencies
-2. 本地安装：scan_local_folder_tool → preview_install_plan → install_local_mod
-3. 维护：list_incomplete_mods / list_pending_mods → check_mod_updates → audit_installation
-4. 卸载：get_uninstall_plan_tool → uninstall_mod_with_plan_review（或 uninstall_mod）
-5. Premium 下载失败：提示用户手动下载到 downloads（文件名含 mod_id）后 install_local_mod
-
-安装机制：
-- 安装前会自动检查压缩包结构；若规则无法覆盖全部文件且已配置 LLM，会结合 Nexus 安装说明生成 file_mappings
-- 执行后写入 InstallRecord（added_files / backed_up_files），即卸载计划
-- 卸载时按 InstallRecord 确定性删除与恢复；uninstall_mod_with_plan_review 会先用 LLM 向用户说明计划
-
-报告规则：
-- JSON 含 error 时不得声称成功
-- added_files_count > 0 才算主模组安装成功
-- 说明 dependencies_installed / dependencies_failed
-"""
 
 
 def build_toolkit() -> Toolkit:
@@ -517,11 +478,12 @@ def build_toolkit() -> Toolkit:
     )
 
 
-def build_agent(model: ChatModelBase) -> Agent:
+def build_agent(model: ChatModelBase, locale: str | None = None) -> Agent:
     init_db()
+    loc = effective_locale(locale)
     return Agent(
         name="CyberpunkModAgent",
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=get_system_prompt(loc),
         model=model,
         toolkit=build_toolkit(),
     )

@@ -6,8 +6,11 @@ import {
   hasMaintenanceHandoffData,
   queueAgentHandoff,
 } from '../utils/agentHandoff'
+import { useI18n } from '../i18n'
 
 const STORAGE_KEY = 'cpmm_maintenance_state'
+
+const { t } = useI18n()
 
 const props = defineProps({
   health: { type: Object, required: true },
@@ -62,16 +65,16 @@ function handoffToAgent() {
     updatesResult: updatesResult.value,
   })
   if (!message) {
-    setError('没有可交给 Agent 处理的审查数据')
+    setError(t('maintenance.noHandoffData'))
     return
   }
   queueAgentHandoff({
-    title: '健康审查处理',
+    title: t('maintenance.handoffTitle'),
     message,
     source: 'maintenance',
   })
   emit('agent-handoff')
-  emit('status', '已交给 Agent，正在跳转…', 'info')
+  emit('status', t('maintenance.handoffDone'), 'info')
 }
 
 function setError(message) {
@@ -85,23 +88,23 @@ async function loadTrending() {
     const data = await api.getTrendingMods()
     trending.value = data.mods || []
   } catch (e) {
-    discoveryError.value = '热门模组加载失败: ' + e.message
+    discoveryError.value = t('maintenance.trendingFailed', { error: e.message })
   }
 }
 
 async function syncTracked() {
   if (!props.health.nexus_valid) {
-    setError('Nexus API Key 无效，无法同步追踪模组')
+    setError(t('maintenance.invalidNexus'))
     return
   }
   syncingTracked.value = true
   discoveryError.value = ''
   try {
     const data = await api.syncTrackedMods()
-    emit('status', `已同步 ${data.synced || 0} 个追踪模组`, 'info')
+    emit('status', t('maintenance.syncedTracked', { count: data.synced || 0 }), 'info')
     emit('refresh-mods')
   } catch (e) {
-    discoveryError.value = '同步追踪模组失败: ' + e.message
+    discoveryError.value = t('maintenance.syncFailed', { error: e.message })
   } finally {
     syncingTracked.value = false
   }
@@ -113,7 +116,7 @@ async function loadUpdatedHits() {
     const data = await api.getUpdatedFeed('1w', true)
     updatedHits.value = data.local_hits || []
   } catch (e) {
-    discoveryError.value = '更新 feed 加载失败: ' + e.message
+    discoveryError.value = t('maintenance.feedFailed', { error: e.message })
   }
 }
 
@@ -155,13 +158,13 @@ function handleJobFinished(latest) {
     applyAuditResult(latest.result)
     emit(
       'status',
-      latest.result.healthy ? '审查完成：未发现明显问题' : '审查完成，发现需处理项',
+      latest.result.healthy ? t('maintenance.auditOk') : t('maintenance.auditIssues'),
       latest.result.healthy ? 'ok' : 'info',
     )
     emit('refresh-mods')
   } else if (latest.kind === 'updates' && latest.result) {
     applyUpdatesResult(latest.result)
-    emit('status', `检查完成：${latest.result.update_count || 0} 个模组有更新`, 'info')
+    emit('status', t('maintenance.updatesDone', { count: latest.result.update_count || 0 }), 'info')
   }
 }
 
@@ -179,14 +182,14 @@ async function pollJob() {
       error.value = ''
       handleJobFinished(latest)
     } else if (latest.state === 'failed') {
-      setError(latest.error || latest.progress?.message || '任务失败')
+      setError(latest.error || latest.progress?.message || t('maintenance.taskFailed'))
     }
     persistState()
   } catch (e) {
     stopPolling()
     auditing.value = false
     checkingUpdates.value = false
-    setError('获取任务进度失败: ' + e.message)
+    setError(t('maintenance.pollFailed', { error: e.message }))
     persistState()
   }
 }
@@ -213,7 +216,7 @@ function clearResultState() {
 
 async function runAudit() {
   if (!props.health.data_dir_configured) {
-    setError('请先配置数据目录')
+    setError(t('maintenance.configureDataDir'))
     return
   }
   stopPolling()
@@ -229,14 +232,14 @@ async function runAudit() {
     startPolling()
   } catch (e) {
     auditing.value = false
-    setError('启动审查失败: ' + e.message)
+    setError(t('maintenance.startAuditFailed', { error: e.message }))
     persistState()
   }
 }
 
 async function runCheckUpdates() {
   if (!props.health.data_dir_configured) {
-    setError('请先配置数据目录')
+    setError(t('maintenance.configureDataDir'))
     return
   }
   stopPolling()
@@ -252,7 +255,7 @@ async function runCheckUpdates() {
     startPolling()
   } catch (e) {
     checkingUpdates.value = false
-    setError('启动更新检查失败: ' + e.message)
+    setError(t('maintenance.startUpdatesFailed', { error: e.message }))
     persistState()
   }
 }
@@ -284,7 +287,7 @@ async function restoreState() {
         else if (latest.kind === 'audit' && latest.result) applyAuditResult(latest.result)
         else if (latest.kind === 'updates' && latest.result) applyUpdatesResult(latest.result)
       } else if (latest.state === 'failed') {
-        setError(latest.error || '任务失败')
+        setError(latest.error || t('maintenance.taskFailed'))
       }
       persistState()
     } catch {
@@ -297,10 +300,10 @@ async function restoreState() {
 
 function actionLabel(action) {
   const map = {
-    install_deps: '补全依赖',
-    reinstall: '重新安装',
-    install_pending: '安装待装模组',
-    manual: '手动处理',
+    install_deps: t('maintenance.actionInstallDeps'),
+    reinstall: t('maintenance.actionReinstall'),
+    install_pending: t('maintenance.actionInstallPending'),
+    manual: t('maintenance.actionManual'),
   }
   return map[action] || action
 }
@@ -324,16 +327,16 @@ onUnmounted(() => {
   <div class="maintenance panel">
     <header class="page-header">
       <div>
-        <h2>健康审查</h2>
-        <p>一键检查依赖不全、待安装、更新与安装记录问题，并由 LLM 给出修复建议。</p>
-        <p v-if="lastUpdated" class="last-updated">上次完成：{{ lastUpdated }}</p>
+        <h2>{{ t('maintenance.title') }}</h2>
+        <p>{{ t('maintenance.subtitle') }}</p>
+        <p v-if="lastUpdated" class="last-updated">{{ t('maintenance.lastDone', { time: lastUpdated }) }}</p>
       </div>
     </header>
 
     <section class="actions panel-inner">
       <label class="auto-fix">
         <input v-model="autoFix" type="checkbox" :disabled="isRunning" />
-        审查后自动修复（补全依赖 + 重装有更新的模组）
+        {{ t('maintenance.autoFixLabel') }}
       </label>
       <div class="btn-row">
         <button
@@ -341,20 +344,20 @@ onUnmounted(() => {
           :disabled="auditing || checkingUpdates || installing || !health.data_dir_configured"
           @click="runAudit"
         >
-          {{ auditing ? '审查中…' : '一键审查' }}
+          {{ auditing ? t('maintenance.auditing') : t('maintenance.runAudit') }}
         </button>
         <button
           class="btn-secondary"
           :disabled="auditing || checkingUpdates || installing || !health.data_dir_configured"
           @click="runCheckUpdates"
         >
-          {{ checkingUpdates ? '检查中…' : '仅检查更新' }}
+          {{ checkingUpdates ? t('maintenance.checking') : t('maintenance.checkUpdatesOnly') }}
         </button>
       </div>
 
       <div v-if="isRunning && progress" class="progress-section">
         <div class="progress-header">
-          <span class="progress-phase">{{ progress.phase_label || '处理中' }}</span>
+          <span class="progress-phase">{{ progress.phase_label || t('maintenance.processing') }}</span>
           <span class="progress-percent">{{ progressPercent }}%</span>
         </div>
         <div class="progress-bar-wrap">
@@ -369,31 +372,31 @@ onUnmounted(() => {
       <p v-if="error" class="error-text">{{ error }}</p>
       <div v-if="canAgentHandoff" class="handoff-row">
         <button class="btn-primary" :disabled="installing" @click="handoffToAgent">
-          交给 Agent 处理
+          {{ t('maintenance.handoffAgent') }}
         </button>
-        <span class="handoff-hint">将审查结果发给 Agent，自动调用工具修复依赖、安装与更新</span>
+        <span class="handoff-hint">{{ t('maintenance.handoffHint') }}</span>
       </div>
       <p v-else-if="!isRunning && report && !health.llm_configured" class="hint warn">
-        未配置 LLM，无法使用 Agent 自动处理。请先在设置中配置 API Key。
+        {{ t('maintenance.noLlmHint') }}
       </p>
     </section>
 
     <section class="discovery panel-inner">
-      <h3>Nexus 发现</h3>
-      <p class="muted">热门模组、追踪同步与近期活动 feed（v3 API）</p>
+      <h3>{{ t('maintenance.discovery') }}</h3>
+      <p class="muted">{{ t('maintenance.discoveryDesc') }}</p>
       <div class="btn-row">
         <button class="btn-secondary" :disabled="!health.data_dir_configured" @click="loadTrending">
-          刷新热门
+          {{ t('maintenance.refreshTrending') }}
         </button>
         <button
           class="btn-secondary"
           :disabled="syncingTracked || !health.nexus_valid"
           @click="syncTracked"
         >
-          {{ syncingTracked ? '同步中…' : '同步追踪模组' }}
+          {{ syncingTracked ? t('maintenance.syncing') : t('maintenance.syncTracked') }}
         </button>
         <button class="btn-secondary" :disabled="!health.data_dir_configured" @click="loadUpdatedHits">
-          刷新活动 feed
+          {{ t('maintenance.refreshFeed') }}
         </button>
       </div>
       <p v-if="discoveryError" class="error-text">{{ discoveryError }}</p>
@@ -404,7 +407,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div v-if="updatedHits.length" class="updated-hits">
-        <h4>本地库存近期有活动（{{ updatedHits.length }}）</h4>
+        <h4>{{ t('maintenance.localActivity', { count: updatedHits.length }) }}</h4>
         <div v-for="hit in updatedHits.slice(0, 8)" :key="hit.mod_id" class="trending-row">
           <span>#{{ hit.mod_id }} {{ hit.name }}</span>
           <span class="muted">{{ hit.local_status }}</span>
@@ -413,23 +416,23 @@ onUnmounted(() => {
     </section>
 
     <section v-if="issueSummary" class="summary panel-inner" :class="{ ok: healthy }">
-      <h3>{{ healthy ? '✓ 安装状态良好' : '发现以下问题' }}</h3>
+      <h3>{{ healthy ? t('maintenance.healthyTitle') : t('maintenance.issuesTitle') }}</h3>
       <ul class="issue-grid">
-        <li><span>待安装</span><strong>{{ issueSummary.pending_count }}</strong></li>
-        <li><span>依赖不全</span><strong>{{ issueSummary.incomplete_count }}</strong></li>
-        <li><span>有更新</span><strong>{{ issueSummary.update_count }}</strong></li>
-        <li><span>无卸载记录</span><strong>{{ issueSummary.no_uninstall_plan_count }}</strong></li>
-        <li><span>已下载未装</span><strong>{{ issueSummary.downloaded_not_installed_count }}</strong></li>
-        <li><span>已禁用</span><strong>{{ issueSummary.disabled_installed_count }}</strong></li>
+        <li><span>{{ t('maintenance.pending') }}</span><strong>{{ issueSummary.pending_count }}</strong></li>
+        <li><span>{{ t('maintenance.incomplete') }}</span><strong>{{ issueSummary.incomplete_count }}</strong></li>
+        <li><span>{{ t('maintenance.updates') }}</span><strong>{{ issueSummary.update_count }}</strong></li>
+        <li><span>{{ t('maintenance.noPlan') }}</span><strong>{{ issueSummary.no_uninstall_plan_count }}</strong></li>
+        <li><span>{{ t('maintenance.downloadedNotInstalled') }}</span><strong>{{ issueSummary.downloaded_not_installed_count }}</strong></li>
+        <li><span>{{ t('maintenance.disabled') }}</span><strong>{{ issueSummary.disabled_installed_count }}</strong></li>
       </ul>
     </section>
 
     <section v-if="llmReport" class="llm panel-inner">
-      <h3>AI 审查结论</h3>
+      <h3>{{ t('maintenance.aiConclusion') }}</h3>
       <p class="llm-summary">{{ llmReport.summary }}</p>
-      <p v-if="llmReport.error" class="llm-error">LLM 未生效：{{ llmReport.error }}</p>
+      <p v-if="llmReport.error" class="llm-error">{{ t('maintenance.llmInactive', { error: llmReport.error }) }}</p>
       <p v-if="llmReport.llm_fallback && !llmReport.error" class="muted">
-        大模型未返回有效 JSON，已使用规则引擎建议。
+        {{ t('maintenance.llmFallback') }}
       </p>
       <ul v-if="llmReport.risks?.length" class="risk-list">
         <li v-for="(risk, i) in llmReport.risks" :key="i">{{ risk }}</li>
@@ -441,11 +444,13 @@ onUnmounted(() => {
           <span class="rec-reason">{{ rec.reason }}</span>
         </div>
       </div>
-      <p class="muted">来源：{{ llmReport.source === 'ai' ? '大模型' : '规则引擎' }}</p>
+      <p class="muted">
+        {{ t('maintenance.sourceLabel', { source: llmReport.source === 'ai' ? t('maintenance.sourceAi') : t('maintenance.sourceRules') }) }}
+      </p>
     </section>
 
     <section v-if="updatesResult?.updates?.length" class="updates panel-inner">
-      <h3>可用更新（{{ updatesResult.update_count || updatesResult.updates.length }}）</h3>
+      <h3>{{ t('maintenance.updatesAvailable', { count: updatesResult.update_count || updatesResult.updates.length }) }}</h3>
       <div v-for="item in updatesResult.updates" :key="item.mod_id" class="update-row">
         <strong>{{ item.name }}</strong>
         <span class="muted">#{{ item.mod_id }}</span>
@@ -455,15 +460,15 @@ onUnmounted(() => {
     </section>
 
     <section v-if="report?.incomplete?.length" class="detail panel-inner">
-      <h3>依赖不全模组</h3>
+      <h3>{{ t('maintenance.incompleteMods') }}</h3>
       <div v-for="mod in report.incomplete" :key="mod.nexus_mod_id" class="mod-row">
         <span>{{ mod.name }}</span>
-        <span class="muted">缺 {{ mod.dependencies_missing_count }} 个依赖</span>
+        <span class="muted">{{ t('maintenance.missingDepsCount', { count: mod.dependencies_missing_count }) }}</span>
       </div>
     </section>
 
     <section v-if="report?.pending?.length" class="detail panel-inner">
-      <h3>待安装模组</h3>
+      <h3>{{ t('maintenance.pendingMods') }}</h3>
       <div v-for="mod in report.pending" :key="mod.nexus_mod_id" class="mod-row">
         <span>{{ mod.name }}</span>
         <span class="muted">{{ mod.status }}</span>
@@ -471,10 +476,10 @@ onUnmounted(() => {
     </section>
 
     <section v-if="autoFixResult" class="fix panel-inner">
-      <h3>自动修复结果</h3>
-      <p>成功 {{ autoFixResult.fixed?.length || 0 }} 项，失败 {{ autoFixResult.failed?.length || 0 }} 项</p>
+      <h3>{{ t('maintenance.autoFixTitle') }}</h3>
+      <p>{{ t('maintenance.autoFixSummary', { fixed: autoFixResult.fixed?.length || 0, failed: autoFixResult.failed?.length || 0 }) }}</p>
       <div v-for="item in autoFixResult.failed || []" :key="item.mod_id + item.action" class="mod-row err">
-        #{{ item.mod_id }} {{ item.action }}：{{ item.result?.error || '失败' }}
+        #{{ item.mod_id }} {{ item.action }}：{{ item.result?.error || t('maintenance.autoFixFailed') }}
       </div>
     </section>
   </div>

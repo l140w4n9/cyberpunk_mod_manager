@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from './api/client'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import AgentWorkspace from './views/AgentWorkspace.vue'
@@ -9,13 +9,15 @@ import CollectionWorkspace from './views/CollectionWorkspace.vue'
 import MaintenanceWorkspace from './views/MaintenanceWorkspace.vue'
 import UninstallDialog from './components/UninstallDialog.vue'
 import { installHashListener, readSavedView, writeView } from './utils/navigation'
+import { healthLabelFromData, i18nState, t } from './i18n'
 
 const activeView = ref(readSavedView())
 const mods = ref([])
 const loading = ref(false)
 const installing = ref(false)
 const cleaning = ref(false)
-const health = ref({ ready: false, label: '检查中...' })
+const health = ref({ ready: false, label: t('health.checking') })
+const lastHealthData = ref(null)
 const status = ref({ message: '', type: '' })
 const uninstallDialog = ref({ visible: false, report: null, modId: null })
 const uninstalling = ref(false)
@@ -33,14 +35,10 @@ async function checkHealth() {
   try {
     const data = await api.health()
     const ready = data.data_dir_configured && data.nexus_valid && data.llm_configured
-    let label = '系统就绪'
-    if (!data.data_dir_configured) label = '数据目录未配置'
-    else if (!data.llm_configured) label = 'LLM 未配置'
-    else if (!data.nexus_configured) label = 'Nexus Key 未配置'
-    else if (!data.nexus_valid) label = 'Nexus Key 无效'
+    lastHealthData.value = data
     health.value = {
       ready,
-      label,
+      label: healthLabelFromData(data),
       llm_configured: data.llm_configured,
       data_dir_configured: data.data_dir_configured,
       nexus_configured: data.nexus_configured,
@@ -50,9 +48,10 @@ async function checkHealth() {
       config_file: data.config_file || '',
     }
   } catch {
+    lastHealthData.value = null
     health.value = {
       ready: false,
-      label: '连接失败',
+      label: t('health.connectionFailed'),
       llm_configured: false,
       data_dir_configured: false,
       nexus_configured: false,
@@ -71,7 +70,7 @@ async function loadMods() {
   try {
     mods.value = await api.listMods(false)
   } catch (e) {
-    setStatus('加载模组失败: ' + e.message, 'err')
+    setStatus(t('app.loadModsFailed', { error: e.message }), 'err')
   } finally {
     loading.value = false
   }
@@ -90,10 +89,10 @@ const MODS_FILTER = {
 
 async function handleCleanupMod(modId) {
   cleaning.value = true
-  setStatus(`正在清理模组 ${modId}...`, 'info')
+  setStatus(t('app.cleaningMod', { modId }), 'info')
   try {
     const data = await api.deleteMod(modId)
-    setStatus(`✓ 已清理 ${data.name || modId}`, 'ok')
+    setStatus(t('app.cleanedMod', { name: data.name || modId }), 'ok')
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -104,12 +103,14 @@ async function handleCleanupMod(modId) {
 
 async function handleCleanupAllPending(modIds) {
   cleaning.value = true
-  setStatus(`正在清理 ${modIds.length} 个待安装模组...`, 'info')
+  setStatus(t('app.cleaningPending', { count: modIds.length }), 'info')
   try {
     const data = await api.cleanupPendingMods(modIds)
     const failed = data.failed_count || 0
     setStatus(
-      `✓ 已清理 ${data.deleted_count || 0} 个` + (failed ? `，${failed} 个失败` : ''),
+      failed
+        ? t('app.cleanedWithFailed', { ok: data.deleted_count || 0, failed })
+        : t('app.cleanedCount', { ok: data.deleted_count || 0 }),
       failed ? 'err' : 'ok',
     )
     await loadMods()
@@ -122,13 +123,13 @@ async function handleCleanupAllPending(modIds) {
 
 async function handleInstall(modId) {
   installing.value = true
-  setStatus(`正在安装模组 ${modId}...`, 'info')
+  setStatus(t('app.installingMod', { modId }), 'info')
   try {
     const data = await api.installMod(modId)
     if (data.skipped) {
-      setStatus(data.message || `模组 ${modId} 已安装，已跳过`, 'info')
+      setStatus(data.message || t('app.modSkipped', { modId }), 'info')
     } else {
-      setStatus(`✓ ${data.name || modId} 安装完成`, 'ok')
+      setStatus(t('app.installDone', { name: data.name || modId }), 'ok')
     }
     await loadMods()
   } catch (e) {
@@ -140,7 +141,7 @@ async function handleInstall(modId) {
 
 async function handleInstallWithDeps(modId) {
   installing.value = true
-  setStatus(`正在安装模组 ${modId} 及依赖...`, 'info')
+  setStatus(t('app.installingWithDeps', { modId }), 'info')
   try {
     const data = await api.installModWithDeps(modId)
     const repaired = (data.dependencies_installed || []).filter((d) => !d.skipped).length
@@ -148,16 +149,18 @@ async function handleInstallWithDeps(modId) {
     if (data.reason === 'deps_repair' || (data.skipped && (repaired || depsFail))) {
       setStatus(
         data.message ||
-          `✓ 已补装 ${repaired} 个依赖` +
-            (depsFail ? `，${depsFail} 个依赖失败` : ''),
+          (depsFail
+            ? t('app.depsRepairedWithFailed', { repaired, failed: depsFail })
+            : t('app.depsRepaired', { repaired })),
         depsFail ? 'err' : 'ok',
       )
     } else if (data.skipped) {
-      setStatus(data.message || `模组 ${modId} 已安装，已跳过`, 'info')
+      setStatus(data.message || t('app.modSkipped', { modId }), 'info')
     } else {
       setStatus(
-        `✓ 安装完成，新增 ${data.added_files_count || 0} 文件` +
-          (depsFail ? `，${depsFail} 个依赖失败` : ''),
+        depsFail
+          ? t('app.installWithFilesFailed', { count: data.added_files_count || 0, failed: depsFail })
+          : t('app.installWithFiles', { count: data.added_files_count || 0 }),
         depsFail ? 'err' : 'ok',
       )
     }
@@ -171,10 +174,10 @@ async function handleInstallWithDeps(modId) {
 
 async function handleInstallLocal({ modId, archiveName }) {
   installing.value = true
-  setStatus(`本地安装模组 ${modId}...`, 'info')
+  setStatus(t('app.localInstalling', { modId }), 'info')
   try {
     const data = await api.installLocalMod(modId, archiveName)
-    setStatus(`✓ 本地安装完成，${data.added_files_count} 文件`, 'ok')
+    setStatus(t('app.localInstallDone', { count: data.added_files_count }), 'ok')
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -187,23 +190,23 @@ async function handleScanLocalFolder(folderPath, callback) {
   try {
     callback(await api.scanLocalFolder(folderPath))
   } catch (e) {
-    setStatus('扫描失败: ' + e.message, 'err')
+    setStatus(t('app.scanFailed', { error: e.message }), 'err')
     callback(null)
   }
 }
 
 async function handleInstallLocalFolder({ folderPath, modIds }) {
   installing.value = true
-  setStatus(`正在从文件夹安装...`, 'info')
+  setStatus(t('app.folderInstalling'), 'info')
   try {
     const data = await api.installLocalFolder(folderPath, modIds)
     const failed = (data.failed || []).length
     const ok = (data.succeeded || []).length
     const skipped = (data.skipped || []).length
     const msg = data.message
-      || `文件夹安装完成：新装 ${ok} 个` +
-        (skipped ? `，跳过 ${skipped} 个已安装` : '') +
-        (failed ? `，${failed} 个失败` : '')
+      || t('app.folderInstallDone', { ok })
+        + (skipped ? t('app.folderInstallSkipped', { skipped }) : '')
+        + (failed ? t('app.folderInstallFailed', { failed }) : '')
     setStatus(`✓ ${msg}`, failed ? 'err' : 'ok')
     await loadMods()
   } catch (e) {
@@ -217,7 +220,7 @@ async function handleCheckDeps(modId, callback) {
   try {
     callback(await api.modDependencies(modId))
   } catch (e) {
-    setStatus('依赖检查失败: ' + e.message, 'err')
+    setStatus(t('app.depsCheckFailed', { error: e.message }), 'err')
     callback(null)
   }
 }
@@ -226,12 +229,12 @@ async function handleUninstall(modId) {
   try {
     const report = await api.uninstallCheck(modId)
     if (!report.can_uninstall) {
-      setStatus(report.warnings?.[0] || '无法卸载', 'err')
+      setStatus(report.warnings?.[0] || t('app.cannotUninstall'), 'err')
       return
     }
     uninstallDialog.value = { visible: true, report, modId }
   } catch (e) {
-    setStatus('卸载检查失败: ' + e.message, 'err')
+    setStatus(t('app.uninstallCheckFailed', { error: e.message }), 'err')
   }
 }
 
@@ -242,7 +245,7 @@ async function confirmUninstall(force) {
   try {
     const data = await api.uninstallMod(modId, force)
     uninstallDialog.value = { visible: false, report: null, modId: null }
-    setStatus(`✓ 已卸载 ${data.removed_files_count} 个文件`, 'ok')
+    setStatus(t('app.uninstalled', { count: data.removed_files_count }), 'ok')
     await loadMods()
   } catch (e) {
     setStatus('✕ ' + e.message, 'err')
@@ -258,6 +261,17 @@ function cancelUninstall() {
 function onConfigSaved() {
   checkHealth().then(() => loadMods())
 }
+
+watch(
+  () => i18nState.locale,
+  () => {
+    if (lastHealthData.value) {
+      health.value.label = healthLabelFromData(lastHealthData.value)
+    } else if (!health.value.ready) {
+      health.value.label = t('health.connectionFailed')
+    }
+  },
+)
 
 let removeHashListener = null
 
@@ -330,8 +344,8 @@ onUnmounted(() => {
         @agent-handoff="navigate('agent')"
       />
       <div v-else class="empty-fallback panel">
-        <p>页面不存在，请从侧栏重新选择。</p>
-        <button class="btn-primary" @click="navigate('agent')">返回 Agent</button>
+        <p>{{ t('app.pageNotFound') }}</p>
+        <button class="btn-primary" @click="navigate('agent')">{{ t('app.backToAgent') }}</button>
       </div>
     </main>
 
