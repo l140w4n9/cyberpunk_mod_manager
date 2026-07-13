@@ -22,7 +22,6 @@ def test_save_config_writes_yaml(tmp_path: Path, monkeypatch) -> None:
         {
             "data_dir": str(data_dir),
             "game_path": str(tmp_path / "game"),
-            "nexus_api_key": "nkey",
             "openai_api_key": "okey",
             "model_name": "m1",
             "openai_base_url": "https://api.example.com/v1",

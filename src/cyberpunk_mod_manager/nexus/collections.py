@@ -10,8 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ..config import config
-from .client import GAME_DOMAIN, NexusAPIError, _build_headers
+from .client import GAME_DOMAIN, NexusAPIError, build_nexus_headers
 
 GRAPHQL_URL = "https://api.nexusmods.com/v2/graphql"
 
@@ -118,7 +117,7 @@ async def fetch_collection(slug: str, domain: str = GAME_DOMAIN) -> CollectionIn
 
 async def _fetch_collection_impl(slug: str, domain: str) -> CollectionInfo:
     headers = {
-        **_build_headers(config.nexus_api_key),
+        **await build_nexus_headers(),
         "Content-Type": "application/json",
     }
     payload = {
@@ -142,7 +141,7 @@ async def _fetch_collection_impl(slug: str, domain: str) -> CollectionInfo:
     collection = data.get("collection") or {}
     revision = data.get("collectionRevision")
     if not collection or revision is None:
-        raise CollectionParseError("未找到该收藏夹，请检查链接或 API Key 权限")
+        raise CollectionParseError("未找到该收藏夹，请检查链接或 Nexus 账户权限")
 
     seen: set[int] = set()
     mods: list[CollectionModEntry] = []

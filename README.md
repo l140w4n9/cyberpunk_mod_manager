@@ -41,7 +41,6 @@ Edit `config.yaml` (**`data_dir` is required**):
 data_dir: "D:/CyberpunkModManager/data"
 game_path: "D:/Steam/steamapps/common/Cyberpunk 2077"
 game_domain: cyberpunk2077          # Nexus game domain; selects which path-rule profile to load
-nexus_api_key: "your Nexus API Key"
 openai_api_key: "your LLM API Key"
 model_name: "gpt-4o-mini"
 openai_base_url: "https://api.openai.com/v1"
@@ -56,8 +55,11 @@ Config lookup order:
 3. `~/.cyberpunk_mod_manager/config.yaml`
 
 You can also fill in the form on the frontend **Settings** page and save it to `config.yaml`.
+You can also configure everything in the web **Settings** page and use **Connect Nexus account** for OAuth (tokens are encrypted locally).
 
-> Environment variables (`NEXUS_API_KEY`, `CP2077_GAME_PATH`, `OPENAI_API_KEY`, `MODEL_NAME`, etc.) still work and take precedence over the config file.
+> Nexus OAuth Client ID is set by the developer in `src/cyberpunk_mod_manager/nexus/credentials.py` (or via `NEXUS_OAUTH_CLIENT_ID` at build time); end users do not configure it.
+>
+> Environment variables (`CP2077_GAME_PATH`, `OPENAI_API_KEY`, `MODEL_NAME`, etc.) still work and take precedence over the config file.
 
 ### 3. Launch
 
@@ -127,7 +129,7 @@ The application adapts to the user's Nexus account tier. **Direct API downloads 
 | **Collection batch auto-download** | ✅ | ❌ (manual download) |
 | **Install from local archive** | ✅ | ✅ |
 
-The sidebar footer shows the user's Premium status (via `validate.json`) so users know which features are available.
+The sidebar footer shows the connected username and Premium status (OAuth JWT / `validate.json`) so users know which features are available.
 
 ## Nexus API architecture (v3)
 
@@ -144,8 +146,8 @@ The main client `nexus/client.py` uses **v3 REST + GraphQL**:
 
 Nexus **does not yet offer a v3 download endpoint**, so a tiny legacy shim `nexus/_legacy_v1.py` is retained, only for:
 
-- Premium download links (`download_link.json`)
-- API key validation (`validate.json`)
+- Premium download links (`download_link.json`, Bearer auth)
+- OAuth session validation (`validate.json`, Bearer auth)
 - Account tracked list (`tracked_mods.json`)
 - Recent activity feed (`updated.json`)
 
@@ -165,8 +167,11 @@ We no longer scan mod descriptions / HTML for Nexus links, avoiding false positi
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/health` | System status, Nexus user/Premium |
-| GET/PUT | `/api/config` | Read / save config |
+| GET | `/api/health` | System status, Nexus connection/Premium |
+| GET/PUT | `/api/config` | Read/save config (no secret plaintext) |
+| POST | `/api/nexus/auth/start` | Start OAuth PKCE flow |
+| GET | `/api/nexus/auth/callback` | OAuth callback (browser) |
+| DELETE | `/api/nexus/auth` | Disconnect Nexus account |
 
 ### Mods
 

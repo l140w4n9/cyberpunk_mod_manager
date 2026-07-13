@@ -19,16 +19,57 @@ from ..services import audit_ops, discovery, health_audit, mod_ops
 from ..services.install_plan import build_install_plan
 from ..services.summary import display_summary, ensure_mod_summary
 from ..storage.db import get_session
+from .errors import api_error, raise_api_error
 
 router = APIRouter()
 
 
 def _ensure_data_dir() -> None:
     if not config.has_data_dir:
-        raise HTTPException(
+        raise_api_error(
             503,
-            detail="data_dir 未配置，请先在「设置」页指定数据存放目录",
+            "CONFIG_DATA_DIR_REQUIRED",
+            "data_dir 未配置，请先在「设置」页指定数据存放目录",
         )
+
+
+def _status_for_service_error(data: dict) -> int:
+    code = str(data.get("code") or "MOD_OP_ERROR")
+    if data.get("premium_only") or code == "NEXUS_PREMIUM_REQUIRED":
+        return 403
+    if code in {"NEXUS_UNAUTHORIZED", "NEXUS_NOT_CONNECTED", "NEXUS_OAUTH_DENIED"}:
+        return 401
+    if code == "NEXUS_NOT_FOUND":
+        return 404
+    if code == "NEXUS_FORBIDDEN":
+        return 403
+    if code in {"MOD_LOCAL_ARCHIVE_MISSING", "MOD_NOT_IN_INVENTORY"}:
+        return 404
+    status_code = data.get("status_code")
+    if isinstance(status_code, int) and 400 <= status_code < 600:
+        return status_code
+    return 502
+
+
+def _parse_result(result: str) -> dict:
+    try:
+        data = json.loads(result)
+    except json.JSONDecodeError as exc:
+        raise api_error(500, "INVALID_SERVICE_RESPONSE", f"Invalid service response: {exc}") from exc
+    if isinstance(data, dict) and data.get("error"):
+        code = str(data.get("code") or "MOD_OP_ERROR")
+        extra = {
+            k: v
+            for k, v in data.items()
+            if k not in {"error", "code", "message", "status_code"}
+        }
+        raise api_error(
+            _status_for_service_error(data),
+            code,
+            str(data["error"]),
+            extra=extra or None,
+        )
+    return data
 
 
 class ModInstallRequest(BaseModel):
@@ -88,17 +129,6 @@ class ModOut(BaseModel):
     dependents: list[DependencyOut] = []
     dependencies_missing_count: int = 0
     dependencies_satisfied: bool = True
-
-
-def _parse_result(result: str) -> dict:
-    try:
-        data = json.loads(result)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(500, f"Invalid service response: {exc}") from exc
-    if isinstance(data, dict) and data.get("error"):
-        status = 403 if data.get("premium_only") else 502
-        raise HTTPException(status, data["error"])
-    return data
 
 
 def _load_all_mods() -> list[Mod]:

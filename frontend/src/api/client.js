@@ -75,10 +75,14 @@ async function request(url, options = {}) {
   const data = await resp.json().catch(() => ({}))
   if (!resp.ok) {
     let message = data.detail || data.error || `HTTP ${resp.status}`
-    if (typeof message === 'object') {
-      message = message.message || JSON.stringify(message)
+    let code = data.code || ''
+    if (typeof message === 'object' && message !== null) {
+      code = message.code || code
+      message = message.message || message.detail || JSON.stringify(message)
     }
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    const err = new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    if (code) err.code = code
+    throw err
   }
   return data
 }
@@ -277,6 +281,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
+  startNexusAuth: () =>
+    request('/api/nexus/auth/start', { method: 'POST' }),
+  nexusAuthStatus: () => request('/api/nexus/auth/status'),
+  disconnectNexus: () =>
+    request('/api/nexus/auth', { method: 'DELETE' }),
   chat: (message, sessionId = null) =>
     request('/api/agent/chat', {
       method: 'POST',

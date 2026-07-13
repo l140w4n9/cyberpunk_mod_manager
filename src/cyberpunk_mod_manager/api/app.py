@@ -24,6 +24,7 @@ from .routes_mods import router as mods_router
 from .routes_agent import router as agent_router
 from .routes_config import router as config_router
 from .routes_collections import router as collections_router
+from .routes_nexus_auth import router as nexus_auth_router
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -60,6 +61,7 @@ class LocaleMiddleware(BaseHTTPMiddleware):
 app.add_middleware(LocaleMiddleware)
 
 app.include_router(config_router, prefix="/api/config", tags=["config"])
+app.include_router(nexus_auth_router, prefix="/api/nexus/auth", tags=["nexus-auth"])
 app.include_router(collections_router, prefix="/api/collections", tags=["collections"])
 app.include_router(mods_router, prefix="/api/mods", tags=["mods"])
 app.include_router(agent_router, prefix="/api/agent", tags=["agent"])
@@ -72,20 +74,31 @@ async def health(quick: bool = False) -> dict:
 
     nexus_valid = False
     nexus_user: dict = {}
-    if config.nexus_api_key and not quick:
-        from ..nexus.client import NexusClient
+    from ..nexus.auth_store import has_nexus_tokens, load_nexus_tokens
+
+    if has_nexus_tokens() and not quick:
+        from ..nexus.client import NexusAPIError, NexusClient
 
         try:
             async with NexusClient() as client:
-                nexus_valid = await client.validate_key()
+                nexus_valid = await client.validate_auth()
                 if nexus_valid:
                     profile = await client.get_user_profile()
                     if profile is not None:
                         nexus_user = profile.model_dump()
+        except NexusAPIError:
+            nexus_valid = False
         except Exception:
             nexus_valid = False
-    elif config.nexus_api_key and quick:
+    elif has_nexus_tokens() and quick:
         nexus_valid = True
+        tokens = load_nexus_tokens()
+        if tokens and tokens.username:
+            nexus_user = {
+                "name": tokens.username,
+                "user_id": tokens.user_id,
+                "is_premium": tokens.is_premium,
+            }
     return {
         "status": "ok",
         "server_port": int(os.environ.get("CP2077_PORT") or 0) or None,
@@ -93,7 +106,7 @@ async def health(quick: bool = False) -> dict:
         "data_dir": str(config.data_dir) if config.has_data_dir else "",
         "data_dir_configured": config.has_data_dir,
         "config_file": config.config_file,
-        "nexus_configured": bool(config.nexus_api_key),
+        "nexus_configured": has_nexus_tokens(),
         "nexus_valid": nexus_valid,
         "nexus_user": nexus_user,
         "nexus_premium": bool(nexus_user.get("is_premium")),

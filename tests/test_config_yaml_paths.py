@@ -35,7 +35,6 @@ def test_save_uses_forward_slashes(tmp_path: Path, monkeypatch) -> None:
         {
             "data_dir": r"D:\my data\mods",
             "game_path": r"D:\Games\CP2077",
-            "nexus_api_key": "",
             "openai_api_key": "",
         }
     )

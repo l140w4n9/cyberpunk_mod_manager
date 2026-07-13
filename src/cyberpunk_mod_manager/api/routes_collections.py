@@ -9,8 +9,10 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..config import config
+from ..nexus.client import NexusAPIError
 from ..nexus.collections import CollectionParseError, fetch_collection
 from ..services import collection_ops
+from .errors import api_error, nexus_exception_to_http
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -53,12 +55,18 @@ async def parse_collection(req: CollectionParseRequest) -> dict:
         )
     except asyncio.TimeoutError as exc:
         logger.warning("collection parse timeout: %s", req.url[:120])
-        raise HTTPException(504, "解析收藏夹超时，请检查网络或稍后重试") from exc
+        raise api_error(
+            504,
+            "NEXUS_COLLECTION_TIMEOUT",
+            "解析收藏夹超时，请检查网络或稍后重试",
+        ) from exc
     except CollectionParseError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error(400, "NEXUS_COLLECTION_INVALID", str(exc)) from exc
+    except NexusAPIError as exc:
+        raise nexus_exception_to_http(exc) from exc
     except Exception as exc:
         logger.exception("collection parse failed")
-        raise HTTPException(502, f"拉取收藏夹失败: {exc}") from exc
+        raise api_error(502, "NEXUS_COLLECTION_FAILED", f"拉取收藏夹失败: {exc}") from exc
     logger.info(
         "collection parse done: slug=%s mods=%s",
         (result.get("collection") or {}).get("slug"),
@@ -89,7 +97,7 @@ async def install_collection(req: CollectionInstallRequest) -> dict:
             skip_installed=req.skip_installed,
         )
     except CollectionParseError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error(400, "NEXUS_COLLECTION_INVALID", str(exc)) from exc
 
     job = collection_ops.get_job(job_id)
     return job.to_dict() if job else {"job_id": job_id}
@@ -123,9 +131,11 @@ async def check_collection_revision(
     try:
         info = await fetch_collection(slug, domain)
     except CollectionParseError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error(400, "NEXUS_COLLECTION_INVALID", str(exc)) from exc
+    except NexusAPIError as exc:
+        raise nexus_exception_to_http(exc) from exc
     except Exception as exc:
-        raise HTTPException(502, f"拉取收藏夹失败: {exc}") from exc
+        raise api_error(502, "NEXUS_COLLECTION_FAILED", f"拉取收藏夹失败: {exc}") from exc
 
     changed = (
         known_revision is not None

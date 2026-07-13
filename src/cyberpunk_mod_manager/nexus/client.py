@@ -44,15 +44,16 @@ class NexusAPIError(RuntimeError):
         *,
         status_code: int | None = None,
         is_premium_only: bool = False,
+        code: str = "NEXUS_API_ERROR",
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.is_premium_only = is_premium_only
+        self.code = code
 
 
-def _build_headers(api_key: str) -> dict[str, str]:
+def _app_headers() -> dict[str, str]:
     return {
-        "apikey": api_key,
         "Application-Name": config.app_name,
         "Application-Version": "0.1.0",
         "User-Agent": f"{config.app_name}/0.1.0",
@@ -60,27 +61,75 @@ def _build_headers(api_key: str) -> dict[str, str]:
     }
 
 
+async def build_nexus_headers() -> dict[str, str]:
+    from .oauth import ensure_access_token
+
+    token = await ensure_access_token()
+    return {
+        **_app_headers(),
+        "Authorization": f"Bearer {token}",
+    }
+
+
+def _parse_problem_details(response: httpx.Response) -> dict[str, Any] | None:
+    content_type = (response.headers.get("content-type") or "").lower()
+    if "json" not in content_type and response.status_code not in {
+        400,
+        401,
+        403,
+        404,
+        422,
+    }:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _parse_api_error(response: httpx.Response) -> NexusAPIError:
+    problem = _parse_problem_details(response)
+    detail = str((problem or {}).get("detail") or "").strip()
+    title = str((problem or {}).get("title") or "").strip()
     body = response.text
-    lower = body.lower()
+    lower = (detail or body).lower()
     is_premium_only = (
         response.status_code == 403
         and "premium" in lower
-        and "download" in lower
+        and ("download" in lower or "subscription" in lower)
     )
     if response.status_code == 401:
-        message = "Nexus API 401：API Key 无效或未正确配置。"
+        message = detail or title or "Nexus 授权无效或已过期，请重新连接账户。"
+        code = "NEXUS_UNAUTHORIZED"
     elif is_premium_only:
         message = (
-            "Nexus API 拒绝下载：非 Premium 账户无法通过 API 获取下载链接。"
-            "请在网站手动下载后放入 downloads 目录。"
+            detail
+            or title
+            or "非 Premium 账户无法通过 API 获取下载链接，请在网站手动下载后放入 downloads 目录。"
         )
+        code = "NEXUS_PREMIUM_REQUIRED"
+    elif response.status_code == 403:
+        message = detail or title or "Nexus API 拒绝访问该资源。"
+        code = "NEXUS_FORBIDDEN"
+    elif response.status_code == 404:
+        message = detail or title or "Nexus 资源不存在。"
+        code = "NEXUS_NOT_FOUND"
+    elif response.status_code == 422:
+        message = detail or title or "Nexus 请求参数无效。"
+        code = "NEXUS_VALIDATION_ERROR"
     else:
-        message = f"Nexus API HTTP {response.status_code}: {body or response.reason_phrase}"
+        message = (
+            detail
+            or title
+            or f"Nexus API HTTP {response.status_code}: {body or response.reason_phrase}"
+        )
+        code = "NEXUS_API_ERROR"
     return NexusAPIError(
         message,
         status_code=response.status_code,
         is_premium_only=is_premium_only,
+        code=code,
     )
 
 
@@ -171,16 +220,17 @@ def parse_materialized_dependencies(payload: dict[str, Any]) -> list[Materialize
 class NexusClient:
     """Nexus Mods 统一客户端。"""
 
-    def __init__(self, api_key: str | None = None) -> None:
-        self.api_key = api_key or config.nexus_api_key
-        if not self.api_key:
+    def __init__(self) -> None:
+        from .auth_store import has_nexus_tokens
+
+        if not has_nexus_tokens():
             raise NexusAPIError(
-                "未配置 nexus_api_key，请在 config.yaml 或环境变量 NEXUS_API_KEY 中设置"
+                "未连接 Nexus 账户，请在设置页通过 OAuth 登录",
+                code="NEXUS_NOT_CONNECTED",
+                status_code=401,
             )
-        self._headers = _build_headers(self.api_key)
         self._client = httpx.AsyncClient(
             base_url=V3_BASE_URL,
-            headers=self._headers,
             timeout=60.0,
             follow_redirects=True,
         )
@@ -194,8 +244,14 @@ class NexusClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def _headers(self) -> dict[str, str]:
+        return await build_nexus_headers()
+
     async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
-        response = await self._client.request(method, url, **kwargs)
+        headers = await self._headers()
+        merged = dict(kwargs.pop("headers", {}) or {})
+        merged.update(headers)
+        response = await self._client.request(method, url, headers=merged, **kwargs)
         if response.status_code == 404:
             return response
         if response.is_error:
@@ -213,10 +269,11 @@ class NexusClient:
         return response.json()
 
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict:
+        headers = await self._headers()
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 GRAPHQL_URL,
-                headers={**self._headers, "Content-Type": "application/json"},
+                headers={**headers, "Content-Type": "application/json"},
                 json={"query": query, "variables": variables or {}},
             )
         if response.is_error:
@@ -243,15 +300,15 @@ class NexusClient:
         _game_id_cache = int(node.get("id") or 3333)
         return _game_id_cache
 
-    async def validate_key(self) -> bool:
+    async def validate_auth(self) -> bool:
         try:
-            profile = await validate_user(self.api_key, self._headers)
+            profile = await self.get_user_profile()
             return profile is not None
         except Exception:
             return False
 
     async def get_user_profile(self) -> UserProfile | None:
-        return await validate_user(self.api_key, self._headers)
+        return await validate_user(await self._headers())
 
     async def resolve_mod_internal_id(self, game_scoped_mod_id: int) -> str:
         data = await self._get_json(f"/games/{GAME_DOMAIN}/mods/{game_scoped_mod_id}")
@@ -338,10 +395,10 @@ class NexusClient:
         return items
 
     async def get_tracked_mod_ids(self) -> list[int]:
-        return await get_tracked_mod_ids(GAME_DOMAIN, self._headers)
+        return await get_tracked_mod_ids(GAME_DOMAIN, await self._headers())
 
     async def get_updated_mod_feed(self, *, period: str = "1w") -> list[dict[str, Any]]:
-        return await get_updated_mods(GAME_DOMAIN, self._headers, period=period)
+        return await get_updated_mods(GAME_DOMAIN, await self._headers(), period=period)
 
     async def get_mod_files_v3(self, internal_mod_id: str) -> list[dict[str, Any]]:
         data = await self._get_json(f"/mods/{internal_mod_id}/files")
@@ -492,7 +549,7 @@ class NexusClient:
         file_name: str | None = None,
     ) -> Path:
         links = await fetch_download_links(
-            GAME_DOMAIN, mod_id, file_id, self._headers
+            GAME_DOMAIN, mod_id, file_id, await self._headers()
         )
         link = _pick_download_link(links)
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -500,7 +557,7 @@ class NexusClient:
         if dest.exists():
             dest.unlink()
         try:
-            await download_from_cdn(link.URI, dest, self._headers)
+            await download_from_cdn(link.URI, dest, await self._headers())
         except Exception:
             if dest.exists():
                 dest.unlink()

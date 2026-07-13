@@ -13,7 +13,6 @@
 
     data_dir: "D:/CyberpunkModManager/data"
     game_path: "D:/Steam/steamapps/common/Cyberpunk 2077"
-    nexus_api_key: "你的 Nexus API Key"
     openai_api_key: "你的 LLM API Key"
     model_name: "gpt-4o-mini"
     openai_base_url: "https://api.openai.com/v1"
@@ -167,9 +166,8 @@ class AppConfig(BaseModel):
     game_path: str = r"C:\Program Files (x86)\Steam\steamapps\common\Cyberpunk 2077"
     # Nexus 游戏域 / 安装档案名（对应 games/{game_domain}.yaml）
     game_domain: str = "cyberpunk2077"
-    # Nexus Mods API Key
-    nexus_api_key: str = ""
-    # LLM 配置
+    # Nexus OAuth Client ID 由开发者配置，见 nexus/credentials.py
+    # LLM 配置（仅存本地 config.yaml，不通过 API 返回明文）
     openai_api_key: str = ""
     model_name: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
@@ -214,22 +212,23 @@ class AppConfig(BaseModel):
         return self.data_dir_path / "manager.db"
 
     @property
-    def nexus_headers(self) -> dict[str, str]:
-        """Nexus API 请求头。"""
-        return {
-            "apikey": self.nexus_api_key,
-            "Application-Name": self.app_name,
-            "Application-Version": "0.1.0",
-            "User-Agent": f"{self.app_name}/0.1.0",
-        }
+    def nexus_connected(self) -> bool:
+        from .nexus.auth_store import has_nexus_tokens
+
+        return has_nexus_tokens()
 
     def to_public_dict(self) -> dict[str, Any]:
+        from .nexus.auth_store import load_nexus_tokens
+
+        tokens = load_nexus_tokens()
         return {
             "data_dir": self.data_dir,
             "game_path": self.game_path,
             "game_domain": self.game_domain,
-            "nexus_api_key": self.nexus_api_key,
-            "openai_api_key": self.openai_api_key,
+            "nexus_connected": self.nexus_connected,
+            "nexus_username": tokens.username if tokens else "",
+            "nexus_auth_method": "oauth" if self.nexus_connected else "",
+            "openai_configured": bool(str(self.openai_api_key).strip()),
             "model_name": self.model_name,
             "openai_base_url": self.openai_base_url,
             "allow_adult_content": self.allow_adult_content,
@@ -256,7 +255,6 @@ def _build_config() -> AppConfig:
     env_map = {
         "data_dir": "CP2077_DATA_DIR",
         "game_path": "CP2077_GAME_PATH",
-        "nexus_api_key": "NEXUS_API_KEY",
         "openai_api_key": "OPENAI_API_KEY",
         "model_name": "MODEL_NAME",
         "openai_base_url": "OPENAI_BASE_URL",
@@ -268,6 +266,12 @@ def _build_config() -> AppConfig:
             merged[field] = val
     if config_path is not None:
         merged["config_file"] = str(config_path)
+    if merged.pop("nexus_oauth_client_id", None):
+        logger.warning("nexus_oauth_client_id 已移至 nexus/credentials.py，config.yaml 中的该项将被忽略")
+    if merged.pop("nexus_api_key", None):
+        logger.warning(
+            "已弃用 nexus_api_key，请改用 OAuth 连接 Nexus（设置页「连接 Nexus 账户」）"
+        )
     return AppConfig(**merged)
 
 
@@ -308,14 +312,22 @@ def save_config(values: dict[str, Any]) -> Path:
     if not data_dir:
         raise ConfigError("data_dir 为必填项")
 
+    path = resolve_config_write_path(config.config_file)
+    existing: dict[str, Any] = {}
+    if path.exists():
+        existing = _load_config_file(path)
+
+    openai_key = str(values.get("openai_api_key", "")).strip()
+    if not openai_key:
+        openai_key = str(existing.get("openai_api_key", "")).strip()
+
     payload = {
         "data_dir": _yaml_safe_path(data_dir),
         "game_path": _yaml_safe_path(
             str(values.get("game_path", "")).strip()
             or r"C:\Program Files (x86)\Steam\steamapps\common\Cyberpunk 2077"
         ),
-        "nexus_api_key": str(values.get("nexus_api_key", "")).strip(),
-        "openai_api_key": str(values.get("openai_api_key", "")).strip(),
+        "openai_api_key": openai_key,
         "model_name": str(values.get("model_name", "gpt-4o-mini")).strip()
         or "gpt-4o-mini",
         "openai_base_url": str(values.get("openai_base_url", "https://api.openai.com/v1")).strip()

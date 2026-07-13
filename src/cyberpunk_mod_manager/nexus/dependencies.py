@@ -14,11 +14,10 @@ from dataclasses import dataclass
 import httpx
 from sqlmodel import select
 
-from ..config import config
 from ..models import Mod, ModDependency
 from ..services.concurrency import DEFAULT_CONCURRENCY, gather_bounded
 from ..storage.db import get_session
-from .client import GAME_DOMAIN, GRAPHQL_URL, _build_headers, NexusClient
+from .client import GAME_DOMAIN, GRAPHQL_URL, NexusClient, build_nexus_headers
 
 MOD_REQUIREMENTS_QUERY = """
 query ModRequirements($modId: ID!, $gameId: ID!) {
@@ -99,7 +98,7 @@ async def _get_game_id() -> int | None:
     if _game_id_cache is not None:
         return _game_id_cache
     headers = {
-        **_build_headers(config.nexus_api_key),
+        **await build_nexus_headers(),
         "Content-Type": "application/json",
     }
     query = """
@@ -199,7 +198,7 @@ async def fetch_nexus_mod_requirements(mod_id: int) -> list[dict]:
     if game_id is None:
         return []
     headers = {
-        **_build_headers(config.nexus_api_key),
+        **await build_nexus_headers(),
         "Content-Type": "application/json",
     }
     payload = {

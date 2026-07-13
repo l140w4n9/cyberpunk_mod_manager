@@ -41,7 +41,6 @@ cp config.example.yaml config.yaml
 data_dir: "D:/CyberpunkModManager/data"
 game_path: "D:/Steam/steamapps/common/Cyberpunk 2077"
 game_domain: cyberpunk2077          # Nexus 游戏域，决定加载哪套安装路径规则
-nexus_api_key: "你的 Nexus API Key"
 openai_api_key: "你的 LLM API Key"
 model_name: "gpt-4o-mini"
 openai_base_url: "https://api.openai.com/v1"
@@ -55,9 +54,11 @@ ui_locale: zh                       # zh | en
 2. 当前工作目录下的 `config.yaml` / `config.yml` / `config.toml`
 3. `~/.cyberpunk_mod_manager/config.yaml`
 
-也可在前端 **设置** 页填写并保存到 `config.yaml`。
+也可在前端 **设置** 页填写并保存到 `config.yaml`，通过 **连接 Nexus 账户** 完成 OAuth 授权（令牌加密存储在本地）。
 
-> 环境变量（`NEXUS_API_KEY`、`CP2077_GAME_PATH`、`OPENAI_API_KEY`、`MODEL_NAME` 等）仍可使用，且优先级高于配置文件。
+> Nexus OAuth Client ID 由开发者在 `src/cyberpunk_mod_manager/nexus/credentials.py` 中配置（或构建时用环境变量 `NEXUS_OAUTH_CLIENT_ID` 注入），用户无需填写。
+>
+> 环境变量（`CP2077_GAME_PATH`、`OPENAI_API_KEY`、`MODEL_NAME` 等）仍可使用，且优先级高于配置文件。
 
 ### 3. 启动
 
@@ -69,7 +70,7 @@ uvicorn cyberpunk_mod_manager.api.app:app --reload
 
 浏览器访问 http://127.0.0.1:8000
 
-侧边栏底部会显示系统状态；Nexus Key 有效时会显示用户名与 Premium 状态。
+侧边栏底部会显示系统状态；连接 Nexus 后会显示用户名与 Premium 状态。
 
 ### 4. 前端开发（Vue 3 + Vite）
 
@@ -96,7 +97,7 @@ npm run build    # 输出到 src/cyberpunk_mod_manager/web/
 | **依赖不全** | 已安装但缺少必需前置的模组 |
 | **收藏安装** | 粘贴 Collection URL，解析队列后批量安装（按收藏夹指定版本） |
 | **健康审查** | 一键审查、更新检测、Nexus 发现（热门/追踪同步/活动 feed） |
-| **设置** | 数据目录、游戏路径、API Key 等 |
+| **设置** | 数据目录、游戏路径、Nexus OAuth 连接、LLM 等 |
 
 ### Agent 对话示例
 
@@ -127,7 +128,7 @@ npm run build    # 输出到 src/cyberpunk_mod_manager/web/
 | **收藏夹批量自动下载** | ✅ | ❌（需手动下载） |
 | **从本地压缩包安装** | ✅ | ✅ |
 
-侧边栏底部会显示用户的 Premium 状态（通过 `validate.json` 获取），方便用户了解当前可用功能。
+侧边栏底部会显示已连接用户名与 Premium 状态（OAuth JWT / `validate.json`），方便用户了解当前可用功能。
 
 ## Nexus API 架构（v3）
 
@@ -144,8 +145,8 @@ npm run build    # 输出到 src/cyberpunk_mod_manager/web/
 
 官方**尚未提供 v3 下载端点**，因此保留极小遗留 shim `nexus/_legacy_v1.py`，仅用于：
 
-- Premium 下载链接（`download_link.json`）
-- API Key 校验（`validate.json`）
+- Premium 下载链接（`download_link.json`，Bearer 认证）
+- OAuth 会话校验（`validate.json`，Bearer 认证）
 - 账户追踪列表（`tracked_mods.json`）
 - 近期活动 feed（`updated.json`）
 
@@ -165,8 +166,11 @@ npm run build    # 输出到 src/cyberpunk_mod_manager/web/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/health` | 系统状态、Nexus 用户/Premium |
-| GET/PUT | `/api/config` | 读取/保存配置 |
+| GET | `/api/health` | 系统状态、Nexus 连接/Premium |
+| GET/PUT | `/api/config` | 读取/保存配置（不含密钥明文） |
+| POST | `/api/nexus/auth/start` | 发起 OAuth PKCE 授权 |
+| GET | `/api/nexus/auth/callback` | OAuth 回调（浏览器） |
+| DELETE | `/api/nexus/auth` | 断开 Nexus 连接 |
 
 ### 模组
 

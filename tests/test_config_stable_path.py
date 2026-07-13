@@ -47,7 +47,6 @@ def test_save_writes_to_loaded_config_file(monkeypatch, tmp_path: Path) -> None:
         {
             "data_dir": str(tmp_path / "data2"),
             "game_path": str(tmp_path / "game"),
-            "nexus_api_key": "nk",
             "openai_api_key": "ok",
             "model_name": "m",
             "openai_base_url": "https://api.example.com/v1",

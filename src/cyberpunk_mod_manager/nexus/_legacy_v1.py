@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Nexus 尚未提供 v3 等效的极少数遗留 v1 接口。
 
-仅用于：Premium 下载链接、API Key 校验、追踪列表、近期更新 feed。
+仅用于：Premium 下载链接、OAuth Bearer 会话校验、追踪列表、近期更新 feed。
 其余能力一律走 v3 REST 或 GraphQL。
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ def _pick_download_link(links: list[DownloadLink]) -> DownloadLink:
     return links[0]
 
 
-async def validate_user(api_key: str, headers: dict[str, str]) -> UserProfile | None:
+async def validate_user(headers: dict[str, str]) -> UserProfile | None:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
             f"{LEGACY_V1_BASE}/users/validate.json",
@@ -72,17 +72,21 @@ async def fetch_download_links(
         from .client import NexusAPIError
 
         if response.status_code == 401:
-            message = "Nexus API 401：API Key 无效"
+            message = "Nexus 授权无效或已过期"
+            code = "NEXUS_UNAUTHORIZED"
         elif is_premium_only:
             message = (
                 "Nexus API 拒绝下载：非 Premium 账户无法通过 API 获取下载链接。"
             )
+            code = "NEXUS_PREMIUM_REQUIRED"
         else:
             message = f"Nexus API HTTP {response.status_code}: {body[:300]}"
+            code = "NEXUS_API_ERROR"
         raise NexusAPIError(
             message,
             status_code=response.status_code,
             is_premium_only=is_premium_only,
+            code=code,
         )
     return [DownloadLink(**item) for item in response.json()]
 

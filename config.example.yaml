@@ -10,10 +10,7 @@ game_path: "D:\\Program Files (x86)\\Steam\\steamapps\\common\\Cyberpunk 2077"
 # Nexus 游戏域，决定加载哪套安装路径规则（见包内 games/ 或 data_dir/game_profiles/）
 game_domain: cyberpunk2077
 
-# Nexus Mods API Key
-nexus_api_key: "你的 Nexus API Key"
-
-# LLM 配置
+# LLM 配置（仅存本地，不会通过 /api/config 返回明文）
 openai_api_key: "你的 LLM API Key"
 model_name: "gpt-4o-mini"
 openai_base_url: "https://api.openai.com/v1"
@@ -23,3 +20,5 @@ install_plan_mode: llm_first
 
 # UI / LLM 回复语言：zh | en（侧栏切换语言时会同步写入）
 ui_locale: zh
+
+# Nexus OAuth Client ID 由开发者在源码 nexus/credentials.py 中配置，不在此文件填写

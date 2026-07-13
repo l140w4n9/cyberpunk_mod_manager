@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from '../api/client'
 import { i18nState, setLocale, useI18n } from '../i18n'
 
@@ -11,7 +11,6 @@ const form = ref({
   data_dir: '',
   game_path: '',
   game_domain: 'cyberpunk2077',
-  nexus_api_key: '',
   openai_api_key: '',
   model_name: 'gpt-4o-mini',
   openai_base_url: 'https://api.openai.com/v1',
@@ -19,11 +18,46 @@ const form = ref({
   install_plan_mode: 'llm_first',
   ui_locale: 'zh',
 })
+const nexusStatus = ref({ connected: false, username: '', auth_method: '' })
+const openaiConfigured = ref(false)
 const configFile = ref('')
 const loading = ref(true)
 const loadFailed = ref(false)
 const saving = ref(false)
+const nexusConnecting = ref(false)
+const nexusDisconnecting = ref(false)
 const message = ref({ text: '', type: '' })
+
+function onOAuthMessage(event) {
+  if (event.origin !== window.location.origin) return
+  const payload = event.data || {}
+  if (payload.type === 'nexus-oauth-complete') {
+    nexusConnecting.value = false
+    nexusStatus.value = {
+      connected: true,
+      username: payload.username || '',
+      auth_method: 'oauth',
+    }
+    message.value = { text: t('settings.nexusConnected', { user: payload.username || '' }), type: 'ok' }
+    emit('saved', { nexus_connected: true })
+  } else if (payload.type === 'nexus-oauth-error') {
+    nexusConnecting.value = false
+    message.value = { text: t('settings.nexusConnectFailed', { error: payload.error || '' }), type: 'err' }
+  }
+}
+
+async function refreshNexusStatus() {
+  try {
+    const status = await api.nexusAuthStatus()
+    nexusStatus.value = {
+      connected: Boolean(status.connected),
+      username: status.username || '',
+      auth_method: status.auth_method || '',
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 async function load() {
   loading.value = true
@@ -35,24 +69,55 @@ async function load() {
       data_dir: data.data_dir || '',
       game_path: data.game_path || '',
       game_domain: data.game_domain || 'cyberpunk2077',
-      nexus_api_key: data.nexus_api_key || '',
-      openai_api_key: data.openai_api_key || '',
+      openai_api_key: '',
       model_name: data.model_name || 'gpt-4o-mini',
       openai_base_url: data.openai_base_url || 'https://api.openai.com/v1',
       allow_adult_content: Boolean(data.allow_adult_content),
       install_plan_mode: data.install_plan_mode || 'llm_first',
       ui_locale: data.ui_locale || i18nState.locale || 'zh',
     }
+    nexusStatus.value = data.nexus || { connected: false, username: '', auth_method: '' }
+    openaiConfigured.value = Boolean(data.openai_configured)
     if (data.ui_locale && data.ui_locale !== i18nState.locale) {
       setLocale(data.ui_locale)
     }
     configFile.value = data.config_file || ''
+    await refreshNexusStatus()
   } catch (e) {
     if (e?.name === 'AbortError') return
     loadFailed.value = true
     message.value = { text: t('settings.loadFailed', { error: e.message }), type: 'err' }
   } finally {
     loading.value = false
+  }
+}
+
+async function connectNexus() {
+  nexusConnecting.value = true
+  message.value = { text: '', type: '' }
+  try {
+    const { authorize_url: authorizeUrl } = await api.startNexusAuth()
+    const popup = window.open(authorizeUrl, 'nexus-oauth', 'width=520,height=720')
+    if (!popup) {
+      throw new Error(t('settings.nexusPopupBlocked'))
+    }
+  } catch (e) {
+    nexusConnecting.value = false
+    message.value = { text: t('settings.nexusConnectFailed', { error: e.message }), type: 'err' }
+  }
+}
+
+async function disconnectNexus() {
+  nexusDisconnecting.value = true
+  try {
+    await api.disconnectNexus()
+    nexusStatus.value = { connected: false, username: '', auth_method: '' }
+    message.value = { text: t('settings.nexusDisconnected'), type: 'ok' }
+    emit('saved', { nexus_connected: false })
+  } catch (e) {
+    message.value = { text: t('settings.nexusDisconnectFailed', { error: e.message }), type: 'err' }
+  } finally {
+    nexusDisconnecting.value = false
   }
 }
 
@@ -66,6 +131,9 @@ async function save() {
   try {
     const data = await api.saveConfig({ ...form.value, ui_locale: i18nState.locale })
     configFile.value = data.config_file || ''
+    nexusStatus.value = data.nexus || nexusStatus.value
+    openaiConfigured.value = Boolean(data.openai_configured)
+    form.value.openai_api_key = ''
     message.value = { text: t('settings.saved'), type: 'ok' }
     emit('saved', data)
   } catch (e) {
@@ -75,7 +143,14 @@ async function save() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  window.addEventListener('message', onOAuthMessage)
+  load()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('message', onOAuthMessage)
+})
 </script>
 
 <template>
@@ -128,9 +203,33 @@ onMounted(load)
 
       <section class="form-section">
         <h3>{{ t('settings.nexus') }}</h3>
-        <div class="input-wrap">
-          <label>{{ t('settings.apiKey') }}</label>
-          <input v-model="form.nexus_api_key" type="password" placeholder="Nexus API Key" />
+        <div class="nexus-auth-row">
+          <div class="nexus-status">
+            <span v-if="nexusStatus.connected" class="status-ok">
+              {{ t('settings.nexusConnectedAs', { user: nexusStatus.username || 'Nexus' }) }}
+            </span>
+            <span v-else class="status-muted">{{ t('settings.nexusNotConnected') }}</span>
+          </div>
+          <div class="btn-row">
+            <button
+              v-if="!nexusStatus.connected"
+              class="btn-primary"
+              type="button"
+              :disabled="nexusConnecting"
+              @click="connectNexus"
+            >
+              {{ nexusConnecting ? t('settings.nexusConnecting') : t('settings.nexusConnect') }}
+            </button>
+            <button
+              v-else
+              class="btn-secondary"
+              type="button"
+              :disabled="nexusDisconnecting"
+              @click="disconnectNexus"
+            >
+              {{ nexusDisconnecting ? t('settings.nexusDisconnecting') : t('settings.nexusDisconnect') }}
+            </button>
+          </div>
         </div>
         <label class="checkbox-row">
           <input v-model="form.allow_adult_content" type="checkbox" />
@@ -142,7 +241,11 @@ onMounted(load)
         <h3>{{ t('settings.llm') }}</h3>
         <div class="input-wrap">
           <label>{{ t('settings.apiKey') }}</label>
-          <input v-model="form.openai_api_key" type="password" placeholder="OpenAI compatible API Key" />
+          <input
+            v-model="form.openai_api_key"
+            type="password"
+            :placeholder="openaiConfigured ? t('settings.apiKeyConfigured') : 'OpenAI compatible API Key'"
+          />
         </div>
         <div class="input-wrap">
           <label>{{ t('settings.modelName') }}</label>
@@ -208,6 +311,15 @@ onMounted(load)
   margin-top: 6px;
   line-height: 1.5;
 }
+.nexus-auth-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+.nexus-status { font-size: 13px; }
+.status-ok { color: var(--ok); }
+.status-muted { color: var(--muted); }
 .config-path {
   font-size: 11px;
   color: var(--muted);

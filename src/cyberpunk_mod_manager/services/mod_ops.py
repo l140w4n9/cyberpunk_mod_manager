@@ -34,8 +34,17 @@ def _status_str(status) -> str:
     return status.value if hasattr(status, "value") else str(status)
 
 
-def error_json(message: str, **extra) -> str:
-    return json.dumps({"error": message, **extra}, ensure_ascii=False)
+def error_json(message: str, *, code: str = "MOD_OP_ERROR", **extra) -> str:
+    return json.dumps({"error": message, "code": code, **extra}, ensure_ascii=False)
+
+
+def nexus_error_json(exc: NexusAPIError) -> str:
+    return error_json(
+        str(exc),
+        code=exc.code,
+        status_code=exc.status_code,
+        premium_only=exc.is_premium_only,
+    )
 
 
 def is_error(result: str) -> bool:
@@ -481,11 +490,7 @@ async def download_mod(
             mod_file = mod_files[0]
             local_path = Path(local_paths[0]["local_path"])
     except NexusAPIError as exc:
-        return error_json(
-            str(exc),
-            status_code=exc.status_code,
-            premium_only=exc.is_premium_only,
-        )
+        return nexus_error_json(exc)
     except Exception as exc:
         return error_json(f"Download failed: {exc}")
 
@@ -630,6 +635,7 @@ async def install_mod(
                         "该模组需 Nexus Premium 才能 API 下载。"
                         f"请手动下载后放入 {config.downloads_dir}，"
                         f"文件名包含 {mod_id}（如 {mod_id}_xxx.zip），再重试安装。",
+                        code="NEXUS_PREMIUM_REQUIRED",
                         premium_only=True,
                         mod_id=mod_id,
                         downloads_dir=str(config.downloads_dir),
@@ -640,6 +646,7 @@ async def install_mod(
                         f"请在 Nexus 网站登录后手动下载，放入 {config.downloads_dir}，"
                         f"文件名包含 {mod_id}（如 {mod_id}_xxx.zip），再重试安装。"
                         "或在「设置」中开启「允许成人内容 API 下载」。",
+                        code="NEXUS_ADULT_CONTENT_BLOCKED",
                         adult_content=True,
                         mod_id=mod_id,
                         downloads_dir=str(config.downloads_dir),

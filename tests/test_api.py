@@ -22,12 +22,31 @@ def client() -> TestClient:
 
 
 def test_health(client: TestClient) -> None:
-    resp = client.get("/api/health")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["nexus_configured"] is True
-    assert data["llm_configured"] is True
+    import time
+
+    from cyberpunk_mod_manager.nexus.auth_store import (
+        NexusTokens,
+        clear_nexus_tokens,
+        save_nexus_tokens,
+    )
+
+    save_nexus_tokens(
+        NexusTokens(
+            access_token="test-access",
+            refresh_token="test-refresh",
+            expires_at=time.time() + 3600,
+            username="tester",
+        )
+    )
+    try:
+        resp = client.get("/api/health?quick=1")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["nexus_configured"] is True
+        assert data["llm_configured"] is True
+    finally:
+        clear_nexus_tokens()
 
 
 def test_list_mods_empty(client: TestClient) -> None:
