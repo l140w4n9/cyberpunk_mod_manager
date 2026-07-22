@@ -11,13 +11,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-import httpx
 from sqlmodel import select
 
 from ..models import Mod, ModDependency
 from ..services.concurrency import DEFAULT_CONCURRENCY, gather_bounded
 from ..storage.db import get_session
+from .cache import TTL_DEPENDENCIES, TTL_GAME_ID, get_or_fetch, make_key
 from .client import GAME_DOMAIN, GRAPHQL_URL, NexusClient, build_nexus_headers
+from .http import request_with_retry
 
 MOD_REQUIREMENTS_QUERY = """
 query ModRequirements($modId: ID!, $gameId: ID!) {
@@ -42,8 +43,6 @@ OPTIONAL_NOTES_RE = re.compile(
     r"\b(optional|recommended|recommend|可选|推荐)\b",
     re.IGNORECASE,
 )
-
-_game_id_cache: int | None = None
 
 # 社区常见前置（Nexus 无结构化依赖时的显式补充，非描述解析）
 KNOWN_MOD_DEPENDENCIES: dict[int, list[dict[str, str | int]]] = {
@@ -93,39 +92,41 @@ class DependentInfo:
 
 
 async def _get_game_id() -> int | None:
-    """查询 cyberpunk2077 的 GraphQL gameId（带内存缓存）。"""
-    global _game_id_cache
-    if _game_id_cache is not None:
-        return _game_id_cache
-    headers = {
-        **await build_nexus_headers(),
-        "Content-Type": "application/json",
-    }
-    query = """
-    query GameId($domain: String!) {
-      game(domainName: $domain) {
-        id
-        domainName
-      }
-    }
-    """
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
+    """查询 cyberpunk2077 的 GraphQL gameId（TTL 缓存）。"""
+
+    async def _fetch() -> int | None:
+        headers = {
+            **await build_nexus_headers(),
+            "Content-Type": "application/json",
+        }
+        query = """
+        query GameId($domain: String!) {
+          game(domainName: $domain) {
+            id
+            domainName
+          }
+        }
+        """
+        try:
+            response = await request_with_retry(
+                "POST",
                 GRAPHQL_URL,
                 headers=headers,
                 json={"query": query, "variables": {"domain": GAME_DOMAIN}},
             )
-        if response.is_error:
+            body = response.json()
+            node = body.get("data", {}).get("game")
+            if node and (node.get("domainName") or "").lower() == GAME_DOMAIN:
+                return int(node["id"])
+        except Exception:
             return None
-        body = response.json()
-        node = body.get("data", {}).get("game")
-        if node and (node.get("domainName") or "").lower() == GAME_DOMAIN:
-            _game_id_cache = int(node["id"])
-            return _game_id_cache
-    except Exception:
         return None
-    return None
+
+    return await get_or_fetch(
+        make_key("graphql_game_id", GAME_DOMAIN),
+        TTL_GAME_ID,
+        _fetch,
+    )
 
 
 def _nexus_requirement_source(notes: str, external: bool) -> str:
@@ -194,53 +195,60 @@ async def fetch_materialized_dependencies_batch(
 
 async def fetch_nexus_mod_requirements(mod_id: int) -> list[dict]:
     """从 Nexus GraphQL 拉取作者在页面上登记的 Nexus requirements（legacy 模型）。"""
-    game_id = await _get_game_id()
-    if game_id is None:
-        return []
-    headers = {
-        **await build_nexus_headers(),
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "query": MOD_REQUIREMENTS_QUERY,
-        "variables": {"modId": str(mod_id), "gameId": str(game_id)},
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(GRAPHQL_URL, headers=headers, json=payload)
-        if response.is_error:
-            return []
-        body = response.json()
-        if body.get("errors"):
-            return []
-        mod_node = body.get("data", {}).get("mod") or {}
-        nodes = (
-            mod_node.get("modRequirements", {})
-            .get("nexusRequirements", {})
-            .get("nodes", [])
-        )
-        legacy_enabled = mod_node.get("legacyModRequirementsEnabled")
-    except Exception:
-        return []
+    key = make_key("mod_requirements", mod_id)
 
-    deps: list[dict] = []
-    for node in nodes:
-        if node.get("externalRequirement"):
-            continue
-        dep_id = int(node.get("modId") or 0)
-        if not dep_id or dep_id == mod_id:
-            continue
-        notes = str(node.get("notes") or "")
-        deps.append(
-            {
-                "mod_id": dep_id,
-                "name": str(node.get("modName") or "").strip(),
-                "source": _nexus_requirement_source(notes, False),
-                "notes": notes,
-                "legacy_requirements": legacy_enabled,
-            }
-        )
-    return deps
+    async def _fetch() -> list[dict]:
+        game_id = await _get_game_id()
+        if game_id is None:
+            return []
+        headers = {
+            **await build_nexus_headers(),
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "query": MOD_REQUIREMENTS_QUERY,
+            "variables": {"modId": str(mod_id), "gameId": str(game_id)},
+        }
+        try:
+            response = await request_with_retry(
+                "POST",
+                GRAPHQL_URL,
+                headers=headers,
+                json=payload,
+            )
+            body = response.json()
+            if body.get("errors"):
+                return []
+            mod_node = body.get("data", {}).get("mod") or {}
+            nodes = (
+                mod_node.get("modRequirements", {})
+                .get("nexusRequirements", {})
+                .get("nodes", [])
+            )
+            legacy_enabled = mod_node.get("legacyModRequirementsEnabled")
+        except Exception:
+            return []
+
+        deps: list[dict] = []
+        for node in nodes:
+            if node.get("externalRequirement"):
+                continue
+            dep_id = int(node.get("modId") or 0)
+            if not dep_id or dep_id == mod_id:
+                continue
+            notes = str(node.get("notes") or "")
+            deps.append(
+                {
+                    "mod_id": dep_id,
+                    "name": str(node.get("modName") or "").strip(),
+                    "source": _nexus_requirement_source(notes, False),
+                    "notes": notes,
+                    "legacy_requirements": legacy_enabled,
+                }
+            )
+        return deps
+
+    return await get_or_fetch(key, TTL_DEPENDENCIES, _fetch)
 
 
 def _lookup_mod_name(session, nexus_mod_id: int) -> str:

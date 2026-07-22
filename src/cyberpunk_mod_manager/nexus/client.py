@@ -36,20 +36,18 @@ _MOD_URL_RE = re.compile(r"/mods/(\d+)", re.IGNORECASE)
 
 _game_id_cache: int | None = None
 
-
-class NexusAPIError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        status_code: int | None = None,
-        is_premium_only: bool = False,
-        code: str = "NEXUS_API_ERROR",
-    ) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.is_premium_only = is_premium_only
-        self.code = code
+from .api_errors import NexusAPIError, parse_api_error as _parse_api_error
+from .cache import (
+    TTL_DEPENDENCIES,
+    TTL_GAME_ID,
+    TTL_MOD_DETAILS,
+    TTL_MOD_FILES,
+    TTL_MODS_BATCH,
+    TTL_USER_PROFILE,
+    get_or_fetch,
+    make_key,
+)
+from .http import request_with_retry
 
 
 def _app_headers() -> dict[str, str]:
@@ -69,68 +67,6 @@ async def build_nexus_headers() -> dict[str, str]:
         **_app_headers(),
         "Authorization": f"Bearer {token}",
     }
-
-
-def _parse_problem_details(response: httpx.Response) -> dict[str, Any] | None:
-    content_type = (response.headers.get("content-type") or "").lower()
-    if "json" not in content_type and response.status_code not in {
-        400,
-        401,
-        403,
-        404,
-        422,
-    }:
-        return None
-    try:
-        payload = response.json()
-    except ValueError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _parse_api_error(response: httpx.Response) -> NexusAPIError:
-    problem = _parse_problem_details(response)
-    detail = str((problem or {}).get("detail") or "").strip()
-    title = str((problem or {}).get("title") or "").strip()
-    body = response.text
-    lower = (detail or body).lower()
-    is_premium_only = (
-        response.status_code == 403
-        and "premium" in lower
-        and ("download" in lower or "subscription" in lower)
-    )
-    if response.status_code == 401:
-        message = detail or title or "Nexus 授权无效或已过期，请重新连接账户。"
-        code = "NEXUS_UNAUTHORIZED"
-    elif is_premium_only:
-        message = (
-            detail
-            or title
-            or "非 Premium 账户无法通过 API 获取下载链接，请在网站手动下载后放入 downloads 目录。"
-        )
-        code = "NEXUS_PREMIUM_REQUIRED"
-    elif response.status_code == 403:
-        message = detail or title or "Nexus API 拒绝访问该资源。"
-        code = "NEXUS_FORBIDDEN"
-    elif response.status_code == 404:
-        message = detail or title or "Nexus 资源不存在。"
-        code = "NEXUS_NOT_FOUND"
-    elif response.status_code == 422:
-        message = detail or title or "Nexus 请求参数无效。"
-        code = "NEXUS_VALIDATION_ERROR"
-    else:
-        message = (
-            detail
-            or title
-            or f"Nexus API HTTP {response.status_code}: {body or response.reason_phrase}"
-        )
-        code = "NEXUS_API_ERROR"
-    return NexusAPIError(
-        message,
-        status_code=response.status_code,
-        is_premium_only=is_premium_only,
-        code=code,
-    )
 
 
 def composite_mod_uid(game_scoped_mod_id: int, game_id: int | None = None) -> str:
@@ -251,12 +187,14 @@ class NexusClient:
         headers = await self._headers()
         merged = dict(kwargs.pop("headers", {}) or {})
         merged.update(headers)
-        response = await self._client.request(method, url, headers=merged, **kwargs)
-        if response.status_code == 404:
-            return response
-        if response.is_error:
-            raise _parse_api_error(response)
-        return response
+        return await request_with_retry(
+            method,
+            url,
+            headers=merged,
+            client=self._client,
+            treat_404_as_ok=True,
+            **kwargs,
+        )
 
     async def _get_json(self, path: str) -> dict[str, Any]:
         response = await self._request("GET", path)
@@ -269,17 +207,13 @@ class NexusClient:
         return response.json()
 
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict:
-        headers = await self._headers()
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                GRAPHQL_URL,
-                headers={**headers, "Content-Type": "application/json"},
-                json={"query": query, "variables": variables or {}},
-            )
-        if response.is_error:
-            raise NexusAPIError(
-                f"Nexus GraphQL HTTP {response.status_code}: {response.text[:300]}"
-            )
+        headers = {**await self._headers(), "Content-Type": "application/json"}
+        response = await request_with_retry(
+            "POST",
+            GRAPHQL_URL,
+            headers=headers,
+            json={"query": query, "variables": variables or {}},
+        )
         body = response.json()
         if body.get("errors"):
             messages = "; ".join(
@@ -290,14 +224,22 @@ class NexusClient:
 
     async def get_game_id(self) -> int:
         global _game_id_cache
+
+        async def _fetch() -> int:
+            data = await self._graphql(
+                "query($d: String!) { game(domainName: $d) { id } }",
+                {"d": GAME_DOMAIN},
+            )
+            node = data.get("game") or {}
+            return int(node.get("id") or 3333)
+
         if _game_id_cache is not None:
             return _game_id_cache
-        data = await self._graphql(
-            "query($d: String!) { game(domainName: $d) { id } }",
-            {"d": GAME_DOMAIN},
+        _game_id_cache = await get_or_fetch(
+            make_key("game_id", GAME_DOMAIN),
+            TTL_GAME_ID,
+            _fetch,
         )
-        node = data.get("game") or {}
-        _game_id_cache = int(node.get("id") or 3333)
         return _game_id_cache
 
     async def validate_auth(self) -> bool:
@@ -308,74 +250,93 @@ class NexusClient:
             return False
 
     async def get_user_profile(self) -> UserProfile | None:
-        return await validate_user(await self._headers())
+        headers = await self._headers()
+
+        async def _fetch() -> UserProfile | None:
+            return await validate_user(headers)
+
+        return await get_or_fetch(
+            make_key("user_profile", headers.get("Authorization", "")[:16]),
+            TTL_USER_PROFILE,
+            _fetch,
+        )
 
     async def resolve_mod_internal_id(self, game_scoped_mod_id: int) -> str:
         data = await self._get_json(f"/games/{GAME_DOMAIN}/mods/{game_scoped_mod_id}")
         return str((data.get("data") or {}).get("id") or "")
 
     async def get_mod_details(self, mod_id: int) -> ModDetails:
-        game_id = await self.get_game_id()
-        gql = await self._graphql(
-            """
-            query ModDetail($modId: ID!, $gameId: ID!) {
-              mod(modId: $modId, gameId: $gameId) {
-                name summary description author version pictureUrl
-                legacyModRequirementsEnabled
-              }
-            }
-            """,
-            {"modId": str(mod_id), "gameId": str(game_id)},
-        )
-        node = gql.get("mod") or {}
-        batch = await self.get_mods_batch([mod_id])
-        batch_info = batch.get(mod_id)
-        internal_id = await self.resolve_mod_internal_id(mod_id)
-        return ModDetails(
-            mod_id=mod_id,
-            name=str(node.get("name") or batch_info.name if batch_info else ""),
-            summary=str(node.get("summary") or batch_info.summary if batch_info else ""),
-            description=str(node.get("description") or ""),
-            author=str(node.get("author") or ""),
-            version=str(node.get("version") or ""),
-            picture_url=str(node.get("pictureUrl") or ""),
-            mod_page_url=f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{mod_id}",
-            internal_mod_id=internal_id,
-            status=batch_info.status if batch_info else "",
-            adult_content=batch_info.adult_content if batch_info else False,
-            legacy_mod_requirements=bool(node.get("legacyModRequirementsEnabled", True)),
-        )
+        key = make_key("mod_details", mod_id)
+
+        async def _fetch() -> ModDetails:
+            game_id = await self.get_game_id()
+            gql = await self._graphql(
+                """
+                query ModDetail($modId: ID!, $gameId: ID!) {
+                  mod(modId: $modId, gameId: $gameId) {
+                    name summary description author version pictureUrl
+                    legacyModRequirementsEnabled
+                  }
+                }
+                """,
+                {"modId": str(mod_id), "gameId": str(game_id)},
+            )
+            node = gql.get("mod") or {}
+            batch = await self.get_mods_batch([mod_id])
+            batch_info = batch.get(mod_id)
+            internal_id = await self.resolve_mod_internal_id(mod_id)
+            return ModDetails(
+                mod_id=mod_id,
+                name=str(node.get("name") or batch_info.name if batch_info else ""),
+                summary=str(node.get("summary") or batch_info.summary if batch_info else ""),
+                description=str(node.get("description") or ""),
+                author=str(node.get("author") or ""),
+                version=str(node.get("version") or ""),
+                picture_url=str(node.get("pictureUrl") or ""),
+                mod_page_url=f"https://www.nexusmods.com/{GAME_DOMAIN}/mods/{mod_id}",
+                internal_mod_id=internal_id,
+                status=batch_info.status if batch_info else "",
+                adult_content=batch_info.adult_content if batch_info else False,
+                legacy_mod_requirements=bool(node.get("legacyModRequirementsEnabled", True)),
+            )
+
+        return await get_or_fetch(key, TTL_MOD_DETAILS, _fetch)
 
     async def get_mods_batch(
         self, mod_ids: list[int]
     ) -> dict[int, ModBatchInfo]:
         if not mod_ids:
             return {}
-        game_id = await self.get_game_id()
-        payload = await self._post_json(
-            "/mods/batch",
-            {"mod_ids": [composite_mod_uid(mid, game_id) for mid in mod_ids]},
-        )
-        result: dict[int, ModBatchInfo] = {}
-        for row in (payload.get("data") or {}).get("mods") or []:
-            composite = str(row.get("id") or "")
-            try:
-                scoped = int(composite) & 0xFFFFFFFF
-            except ValueError:
-                scoped = parse_mod_id_from_url(str(row.get("mod_page_url") or ""))
-            if not scoped:
-                continue
-            result[scoped] = ModBatchInfo(
-                composite_id=composite,
-                game_id=str(row.get("game_id") or game_id),
-                mod_id=scoped,
-                name=str(row.get("name") or ""),
-                summary=str(row.get("summary") or ""),
-                status=str(row.get("status") or ""),
-                adult_content=bool(row.get("adult_content")),
-                thumbnail_url=str(row.get("thumbnail_url") or ""),
+        key = make_key("mods_batch", *sorted(mod_ids))
+
+        async def _fetch() -> dict[int, ModBatchInfo]:
+            game_id = await self.get_game_id()
+            payload = await self._post_json(
+                "/mods/batch",
+                {"mod_ids": [composite_mod_uid(mid, game_id) for mid in mod_ids]},
             )
-        return result
+            result: dict[int, ModBatchInfo] = {}
+            for row in (payload.get("data") or {}).get("mods") or []:
+                composite = str(row.get("id") or "")
+                try:
+                    scoped = int(composite) & 0xFFFFFFFF
+                except ValueError:
+                    scoped = parse_mod_id_from_url(str(row.get("mod_page_url") or ""))
+                if not scoped:
+                    continue
+                result[scoped] = ModBatchInfo(
+                    composite_id=composite,
+                    game_id=str(row.get("game_id") or game_id),
+                    mod_id=scoped,
+                    name=str(row.get("name") or ""),
+                    summary=str(row.get("summary") or ""),
+                    status=str(row.get("status") or ""),
+                    adult_content=bool(row.get("adult_content")),
+                    thumbnail_url=str(row.get("thumbnail_url") or ""),
+                )
+            return result
+
+        return await get_or_fetch(key, TTL_MODS_BATCH, _fetch)
 
     async def get_trending_mods(self) -> list[TrendingMod]:
         data = await self._get_json(f"/games/{GAME_DOMAIN}/trending-mods")
@@ -401,8 +362,13 @@ class NexusClient:
         return await get_updated_mods(GAME_DOMAIN, await self._headers(), period=period)
 
     async def get_mod_files_v3(self, internal_mod_id: str) -> list[dict[str, Any]]:
-        data = await self._get_json(f"/mods/{internal_mod_id}/files")
-        return (data.get("data") or {}).get("mod_files") or []
+        key = make_key("mod_files", internal_mod_id)
+
+        async def _fetch() -> list[dict[str, Any]]:
+            data = await self._get_json(f"/mods/{internal_mod_id}/files")
+            return (data.get("data") or {}).get("mod_files") or []
+
+        return await get_or_fetch(key, TTL_MOD_FILES, _fetch)
 
     async def get_mod_file_versions(self, mod_file_id: str) -> list[dict[str, Any]]:
         data = await self._get_json(f"/mod-files/{mod_file_id}/versions")
@@ -426,10 +392,15 @@ class NexusClient:
     async def get_materialized_dependencies(
         self, version_id: str
     ) -> list[MaterializedDependency]:
-        data = await self._get_json(
-            f"/mod-file-versions/{version_id}/dependencies/materialized"
-        )
-        return parse_materialized_dependencies(data)
+        key = make_key("materialized_deps", version_id)
+
+        async def _fetch() -> list[MaterializedDependency]:
+            data = await self._get_json(
+                f"/mod-file-versions/{version_id}/dependencies/materialized"
+            )
+            return parse_materialized_dependencies(data)
+
+        return await get_or_fetch(key, TTL_DEPENDENCIES, _fetch)
 
     async def get_dependency_ranges(self, version_id: str) -> dict[str, Any]:
         """获取指定文件版本的依赖范围定义（v3）。"""

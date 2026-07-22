@@ -43,6 +43,8 @@ def _status_for_service_error(data: dict) -> int:
         return 404
     if code == "NEXUS_FORBIDDEN":
         return 403
+    if code == "NEXUS_RATE_LIMIT":
+        return 429
     if code in {"MOD_LOCAL_ARCHIVE_MISSING", "MOD_NOT_IN_INVENTORY"}:
         return 404
     status_code = data.get("status_code")

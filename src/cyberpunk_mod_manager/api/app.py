@@ -99,6 +99,8 @@ async def health(quick: bool = False) -> dict:
                 "user_id": tokens.user_id,
                 "is_premium": tokens.is_premium,
             }
+    from ..nexus.rate_limit import get_snapshot
+
     return {
         "status": "ok",
         "server_port": int(os.environ.get("CP2077_PORT") or 0) or None,
@@ -110,6 +112,7 @@ async def health(quick: bool = False) -> dict:
         "nexus_valid": nexus_valid,
         "nexus_user": nexus_user,
         "nexus_premium": bool(nexus_user.get("is_premium")),
+        "nexus_rate_limit": get_snapshot().to_dict(),
         "llm_configured": bool(config.openai_api_key),
         "ui_locale": config.ui_locale,
     }

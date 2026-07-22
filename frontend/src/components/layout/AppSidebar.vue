@@ -128,6 +128,9 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
             {{ health.nexus_user.name }}
             <template v-if="health.nexus_premium"> · Premium</template>
           </span>
+          <span v-if="health.nexus_quota_warning" class="health-sub warn">
+            {{ health.nexus_quota_warning }}
+          </span>
         </div>
       </div>
     </div>
@@ -292,6 +295,10 @@ const incompleteCount = computed(() => filterMods(props.mods, 'incomplete').leng
   font-size: 10px;
   opacity: 0.75;
   line-height: 1.3;
+}
+.health-sub.warn {
+  color: var(--warn, #e6a817);
+  opacity: 1;
 }
 .health-dot {
   width: 6px;

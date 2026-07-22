@@ -12,6 +12,7 @@ from typing import Any
 
 from ..models import ModStatus
 from ..nexus.collections import CollectionModEntry, CollectionParseError, fetch_collection, parse_collection_url
+from ..nexus.rate_limit import await_rate_limit_capacity
 from ..nexus.schemas import FilePin
 from . import mod_ops
 from .concurrency import DEFAULT_CONCURRENCY, gather_bounded
@@ -317,6 +318,8 @@ async def _run_job(
             return
         if item.status != QueueItemStatus.PENDING.value:
             return
+
+        await await_rate_limit_capacity()
 
         async with state_lock:
             job.current_mod_id = item.mod_id

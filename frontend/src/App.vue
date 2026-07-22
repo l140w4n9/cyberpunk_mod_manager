@@ -45,6 +45,7 @@ async function checkHealth() {
       nexus_valid: data.nexus_valid,
       nexus_premium: data.nexus_premium,
       nexus_user: data.nexus_user || {},
+      nexus_quota_warning: data.nexus_rate_limit?.warning || '',
       config_file: data.config_file || '',
     }
   } catch {

@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
-
-from .client import GAME_DOMAIN, NexusAPIError, build_nexus_headers
+from .api_errors import NexusAPIError
+from .cache import TTL_COLLECTION_REVISION, get_or_fetch, make_key
+from .client import GAME_DOMAIN, build_nexus_headers
+from .http import request_with_retry
 
 GRAPHQL_URL = "https://api.nexusmods.com/v2/graphql"
 
@@ -106,7 +107,11 @@ async def fetch_collection(slug: str, domain: str = GAME_DOMAIN) -> CollectionIn
     """通过 Nexus GraphQL 拉取收藏夹模组列表（按收藏夹顺序）。"""
     try:
         return await asyncio.wait_for(
-            _fetch_collection_impl(slug, domain),
+            get_or_fetch(
+                make_key("collection_revision", domain, slug),
+                TTL_COLLECTION_REVISION,
+                lambda: _fetch_collection_impl(slug, domain),
+            ),
             timeout=60.0,
         )
     except asyncio.TimeoutError as exc:
@@ -124,12 +129,12 @@ async def _fetch_collection_impl(slug: str, domain: str) -> CollectionInfo:
         "query": COLLECTION_REVISION_QUERY,
         "variables": {"slug": slug, "domainName": domain},
     }
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(GRAPHQL_URL, headers=headers, json=payload)
-    if response.is_error:
-        raise NexusAPIError(
-            f"Nexus GraphQL HTTP {response.status_code}: {response.text[:300]}"
-        )
+    response = await request_with_retry(
+        "POST",
+        GRAPHQL_URL,
+        headers=headers,
+        json=payload,
+    )
     body = response.json()
     if body.get("errors"):
         messages = "; ".join(
